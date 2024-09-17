@@ -1,5 +1,11 @@
 package hudson.model.queue;
 
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.containsString;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertTrue;
+
 import hudson.model.FreeStyleProject;
 import hudson.model.Node;
 import hudson.model.Queue;
@@ -8,8 +14,6 @@ import hudson.model.TaskListener;
 import hudson.util.StreamTaskListener;
 import java.io.StringWriter;
 import java.util.logging.Level;
-import static org.hamcrest.Matchers.containsString;
-import static org.junit.Assert.*;
 import org.junit.Rule;
 import org.junit.Test;
 import org.jvnet.hudson.test.Issue;
@@ -36,6 +40,9 @@ public class QueueTaskDispatcherTest {
 
         assertTrue("Not blocked", item.isBlocked());
         assertEquals("Expected CauseOfBlockage to be returned", "blocked by canRun", item.getWhy());
+
+        // Clear the queue
+        assertTrue(r.jenkins.getQueue().cancel(project));
     }
 
     @TestExtension("canRunBlockageIsDisplayed")
@@ -71,6 +78,9 @@ public class QueueTaskDispatcherTest {
         cob.print(l);
         l.getLogger().flush();
         assertThat(w.toString(), containsString("blocked by canTake"));
+
+        // Clear the queue
+        assertTrue(r.jenkins.getQueue().cancel(project));
     }
 
     @TestExtension("canTakeBlockageIsDisplayed")

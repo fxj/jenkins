@@ -1,40 +1,47 @@
-var windowHandle = require('window-handle');
-var win = windowHandle.getWindow();
-var storage = win.localStorage;
+import { getWindow } from "window-handle";
 
-exports.setMock = function() {
-    storage = {
-        storage: {},
-        setItem: function (name, value) {
-            this.storage[name] = value;
-        },
-        getItem: function (name) {
-            return this.storage[name];
-        },
-        removeItem: function (name) {
-            delete this.storage[name];
-        }
-    };
-};
+let storage = getWindow().localStorage;
 
-exports.setItem = function(name, value) {
-    storage.setItem(name, value);
-};
+function setMock() {
+  storage = {
+    storage: {},
+    setItem: function (name, value) {
+      this.storage[name] = value;
+    },
+    getItem: function (name) {
+      return this.storage[name];
+    },
+    removeItem: function (name) {
+      delete this.storage[name];
+    },
+  };
+}
 
-exports.getItem = function(name, defaultVal) {
-    var value = storage.getItem(name);
-    if (!value) {
-        value = defaultVal;
-    }
-    return  value;
-};
+function setItem(name, value) {
+  storage.setItem(name, value);
+}
 
-exports.removeItem = function(name) {
-    return storage.removeItem(name);
-};
+function getItem(name, defaultVal) {
+  var value = storage.getItem(name);
+  if (!value) {
+    value = defaultVal;
+  }
+  return value;
+}
+
+function removeItem(name) {
+  return storage.removeItem(name);
+}
 
 if (typeof storage === "undefined") {
-    console.warn('HTML5 localStorage not supported by this browser.');
-    // mock it...
-    exports.setMock();
+  console.warn("HTML5 localStorage not supported by this browser.");
+  // mock it...
+  setMock();
 }
+
+export default {
+  setMock,
+  setItem,
+  getItem,
+  removeItem,
+};

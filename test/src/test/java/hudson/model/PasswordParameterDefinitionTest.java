@@ -24,15 +24,14 @@
 
 package hudson.model;
 
-import com.gargoylesoftware.htmlunit.html.HtmlForm;
-import com.gargoylesoftware.htmlunit.html.HtmlPasswordInput;
+import static org.junit.Assert.assertEquals;
+
 import hudson.Launcher;
 import java.io.IOException;
 import jenkins.model.Jenkins;
-import static org.junit.Assert.assertEquals;
-
-import jenkins.security.apitoken.ApiTokenPropertyConfiguration;
-import jenkins.security.apitoken.ApiTokenTestHelper;
+import org.htmlunit.html.HtmlElement;
+import org.htmlunit.html.HtmlForm;
+import org.htmlunit.html.HtmlPasswordInput;
 import org.junit.Rule;
 import org.junit.Test;
 import org.jvnet.hudson.test.Issue;
@@ -53,8 +52,6 @@ public class PasswordParameterDefinitionTest {
 
     @Issue("JENKINS-36476")
     @Test public void defaultValueAlwaysAvailable() throws Exception {
-        ApiTokenTestHelper.enableLegacyBehavior();
-        
         j.jenkins.setSecurityRealm(j.createDummySecurityRealm());
         j.jenkins.setAuthorizationStrategy(new MockAuthorizationStrategy().
             grant(Jenkins.ADMINISTER).everywhere().to("admin").
@@ -71,8 +68,9 @@ public class PasswordParameterDefinitionTest {
         User admin = User.getById("admin", true);
         User dev = User.getById("dev", true);
 
-        JenkinsRule.WebClient wc = j.createWebClient();
-        wc.getOptions().setThrowExceptionOnFailingStatusCode(false); // ParametersDefinitionProperty/index.jelly sends a 405 but really it is OK
+        JenkinsRule.WebClient wc = j.createWebClient()
+                // ParametersDefinitionProperty/index.jelly sends a 405 but really it is OK
+                .withThrowExceptionOnFailingStatusCode(false);
         // Control case: admin can use default value.
         j.submit(wc.withBasicApiToken(admin).getPage(p, "build?delay=0sec").getFormByName("parameters"));
         j.waitUntilNoActivity();
@@ -82,6 +80,7 @@ public class PasswordParameterDefinitionTest {
 
         // Another control case: anyone can enter a different value.
         HtmlForm form = wc.withBasicApiToken(dev).getPage(p, "build?delay=0sec").getFormByName("parameters");
+        ((HtmlElement) form.querySelector("button.hidden-password-update-btn")).click();
         HtmlPasswordInput input = form.getInputByName("value");
         input.setText("rumor");
         j.submit(form);
@@ -99,6 +98,7 @@ public class PasswordParameterDefinitionTest {
 
         // Another control case: blank values.
         form = wc.withBasicApiToken(dev).getPage(p, "build?delay=0sec").getFormByName("parameters");
+        ((HtmlElement) form.querySelector("button.hidden-password-update-btn")).click();
         input = form.getInputByName("value");
         input.setText("");
         j.submit(form);

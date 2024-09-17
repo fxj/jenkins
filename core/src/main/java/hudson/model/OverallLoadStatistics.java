@@ -21,6 +21,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
+
 package hudson.model;
 
 import hudson.model.MultiStageTimeSeries.TimeScale;
@@ -52,7 +53,7 @@ public class OverallLoadStatistics extends LoadStatistics {
     public final MultiStageTimeSeries totalQueueLength = queueLength;
 
     public OverallLoadStatistics() {
-        super(0,0);
+        super(0, 0);
     }
 
     @Override
@@ -67,12 +68,12 @@ public class OverallLoadStatistics extends LoadStatistics {
 
     @Override
     public int computeQueueLength() {
-        return Jenkins.getInstance().getQueue().countBuildableItems();
+        return Jenkins.get().getQueue().countBuildableItems();
     }
 
     @Override
     protected Iterable<Node> getNodes() {
-        return Jenkins.getActiveInstance().getNodes();
+        return Jenkins.get().getNodes();
     }
 
     @Override
@@ -85,6 +86,6 @@ public class OverallLoadStatistics extends LoadStatistics {
      * not {@link #queueLength}, which just shows jobs that are to be run on the master.
      */
     protected TrendChart createOverallTrendChart(TimeScale timeScale) {
-        return MultiStageTimeSeries.createTrendChart(timeScale,busyExecutors,onlineExecutors,queueLength,availableExecutors);
+        return MultiStageTimeSeries.createTrendChart(timeScale, busyExecutors, onlineExecutors, queueLength, availableExecutors);
     }
 }

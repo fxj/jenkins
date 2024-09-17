@@ -1,18 +1,18 @@
 /*
  * The MIT License
- * 
+ *
  * Copyright (c) 2004-2009, Sun Microsystems, Inc., Kohsuke Kawaguchi
- * 
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
  * in the Software without restriction, including without limitation the rights
  * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
  * copies of the Software, and to permit persons to whom the Software is
  * furnished to do so, subject to the following conditions:
- * 
+ *
  * The above copyright notice and this permission notice shall be included in
  * all copies or substantial portions of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
  * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
@@ -21,12 +21,13 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
+
 package hudson.util;
 
-import com.trilead.ssh2.crypto.Base64;
-
-import java.io.IOException;
-import java.io.UnsupportedEncodingException;
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /**
  * Scrambles, but does not encrypt, text.
@@ -34,23 +35,21 @@ import java.io.UnsupportedEncodingException;
  * Use {@link Secret} instead.
  *
  * @author Kohsuke Kawaguchi
- * @see Protector
  */
 public class Scrambler {
+    private static final Logger LOGGER = Logger.getLogger(Scrambler.class.getName());
+
     public static String scramble(String secret) {
-        if(secret==null)    return null;
-        try {
-            return new String(Base64.encode(secret.getBytes("UTF-8")));
-        } catch (UnsupportedEncodingException e) {
-            throw new Error(e); // impossible
-        }
+        if (secret == null)    return null;
+        return Base64.getEncoder().encodeToString(secret.getBytes(StandardCharsets.UTF_8));
     }
 
     public static String descramble(String scrambled) {
-        if(scrambled==null)    return null;
+        if (scrambled == null)    return null;
         try {
-            return new String(Base64.decode(scrambled.toCharArray()),"UTF-8");
-        } catch (IOException e) {
+            return new String(Base64.getDecoder().decode(scrambled.getBytes(StandardCharsets.UTF_8)), StandardCharsets.UTF_8);
+        } catch (IllegalArgumentException e) {
+            LOGGER.log(Level.WARNING, "Corrupted data", e);
             return "";  // corrupted data.
         }
     }

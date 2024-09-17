@@ -1,29 +1,28 @@
 package hudson.security;
 
-import static javax.servlet.http.HttpServletResponse.SC_UNAUTHORIZED;
-import static org.acegisecurity.ui.rememberme.TokenBasedRememberMeServices.ACEGI_SECURITY_HASHED_REMEMBER_ME_COOKIE_KEY;
+import static jakarta.servlet.http.HttpServletResponse.SC_UNAUTHORIZED;
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.containsString;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 
-import com.gargoylesoftware.htmlunit.html.HtmlFormUtil;
-import com.gargoylesoftware.htmlunit.html.HtmlPage;
-import com.gargoylesoftware.htmlunit.html.HtmlForm;
-import com.gargoylesoftware.htmlunit.html.HtmlCheckBoxInput;
-
 import hudson.model.User;
-import jenkins.security.apitoken.ApiTokenPropertyConfiguration;
-import jenkins.security.apitoken.ApiTokenTestHelper;
+import java.io.IOException;
+import java.net.URL;
+import jenkins.model.Jenkins;
+import org.htmlunit.html.HtmlForm;
+import org.htmlunit.html.HtmlFormUtil;
+import org.htmlunit.html.HtmlPage;
 import org.junit.Rule;
 import org.junit.Test;
 import org.jvnet.hudson.test.JenkinsRule;
 import org.jvnet.hudson.test.JenkinsRule.WebClient;
+import org.jvnet.hudson.test.MockAuthorizationStrategy;
 import org.jvnet.hudson.test.recipes.PresetData;
 import org.jvnet.hudson.test.recipes.PresetData.DataSet;
+import org.springframework.security.web.authentication.rememberme.AbstractRememberMeServices;
 import org.xml.sax.SAXException;
-
-import java.io.IOException;
-import java.net.URL;
 
 /**
  * @author Kohsuke Kawaguchi
@@ -55,8 +54,6 @@ public class LoginTest {
     @Test
     @PresetData(DataSet.ANONYMOUS_READONLY)
     public void loginErrorRedirect2() throws Exception {
-        ApiTokenTestHelper.enableLegacyBehavior();
-
         // in a secured Hudson, the error page should render.
         WebClient wc = j.createWebClient();
         wc.assertFails("loginError", SC_UNAUTHORIZED);
@@ -64,14 +61,28 @@ public class LoginTest {
         verifyNotError(wc.withBasicApiToken(User.getById("alice", true)));
     }
 
+    @Test
+    public void loginError() throws Exception {
+        j.jenkins.setSecurityRealm(j.createDummySecurityRealm());
+        j.jenkins.setAuthorizationStrategy(new MockAuthorizationStrategy().grant(Jenkins.ADMINISTER).everywhere().toAuthenticated());
+        WebClient wc = j.createWebClient();
+        HtmlPage page = wc.goTo("login");
+        HtmlForm form = page.getFormByName("login");
+        form.getInputByName("j_username").setValue("alice");
+        form.getInputByName("j_password").setValue("oops I forgot");
+        wc.setThrowExceptionOnFailingStatusCode(false);
+        page = (HtmlPage) HtmlFormUtil.submit(form, null);
+        assertThat(page.asNormalizedText(), containsString("Invalid username or password"));
+    }
+
     private HtmlForm prepareLoginFormWithRememberMeChecked(WebClient wc) throws IOException, org.xml.sax.SAXException {
         wc.getCookieManager().setCookiesEnabled(true);
         HtmlPage page = wc.goTo("login");
 
         HtmlForm form = page.getFormByName("login");
-        form.getInputByName("j_username").setValueAttribute("alice");
-        form.getInputByName("j_password").setValueAttribute("alice");
-        ((HtmlCheckBoxInput)form.getInputByName("remember_me")).setChecked(true);
+        form.getInputByName("j_username").setValue("alice");
+        form.getInputByName("j_password").setValue("alice");
+        form.getInputByName("remember_me").setChecked(true);
         return form;
     }
 
@@ -79,7 +90,7 @@ public class LoginTest {
      * Returns the 'remember me' cookie if set, otherwise return null. We don't care about the type, only whether it's null
      */
     private Object getRememberMeCookie(WebClient wc) {
-        return wc.getCookieManager().getCookie(ACEGI_SECURITY_HASHED_REMEMBER_ME_COOKIE_KEY);
+        return wc.getCookieManager().getCookie(AbstractRememberMeServices.SPRING_SECURITY_REMEMBER_ME_COOKIE_KEY);
     }
 
     /**

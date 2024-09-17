@@ -21,20 +21,8 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-package hudson;
 
-import com.gargoylesoftware.htmlunit.html.DomElement;
-import com.gargoylesoftware.htmlunit.html.HtmlElement;
-import com.gargoylesoftware.htmlunit.html.HtmlElementUtil;
-import com.gargoylesoftware.htmlunit.html.HtmlInput;
-import com.gargoylesoftware.htmlunit.html.HtmlPage;
-import com.gargoylesoftware.htmlunit.html.HtmlTableRow;
-import org.junit.Assert;
-import org.junit.Rule;
-import org.junit.Test;
-import org.jvnet.hudson.test.JenkinsRule;
-import org.jvnet.hudson.test.TestPluginManager;
-import org.xml.sax.SAXException;
+package hudson;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -43,6 +31,19 @@ import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import org.htmlunit.html.DomElement;
+import org.htmlunit.html.HtmlElement;
+import org.htmlunit.html.HtmlElementUtil;
+import org.htmlunit.html.HtmlInput;
+import org.htmlunit.html.HtmlPage;
+import org.htmlunit.html.HtmlTableRow;
+import org.junit.Assert;
+import org.junit.Rule;
+import org.junit.Test;
+import org.jvnet.hudson.test.Issue;
+import org.jvnet.hudson.test.JenkinsRule;
+import org.jvnet.hudson.test.TestPluginManager;
+import org.xml.sax.SAXException;
 
 /**
  * @author <a href="mailto:tom.fennelly@gmail.com">tom.fennelly@gmail.com</a>
@@ -60,8 +61,10 @@ public class PluginManagerInstalledGUITest {
                         try {
                             return super.loadBundledPlugins();
                         } finally {
-                            copyBundledPlugin(PluginManagerInstalledGUITest.class.getResource("/WEB-INF/detached-plugins/cvs.hpi"), "cvs.jpi"); // cannot use installDetachedPlugin at this point
-                            copyBundledPlugin(PluginManagerInstalledGUITest.class.getResource("/plugins/tasks.jpi"), "tasks.jpi");
+                            copyBundledPlugin(PluginManagerInstalledGUITest.class.getResource("/WEB-INF/detached-plugins/matrix-auth.hpi"), "matrix-auth.jpi"); // cannot use installDetachedPlugin at this point
+                            copyBundledPlugin(PluginManagerInstalledGUITest.class.getResource("/plugins/dependee-0.0.2.hpi"), "dependee.jpi");
+                            copyBundledPlugin(PluginManagerInstalledGUITest.class.getResource("/plugins/depender-0.0.2.hpi"), "depender.jpi");
+                            copyBundledPlugin(PluginManagerInstalledGUITest.class.getResource("/plugins/mandatory-depender-0.0.2.hpi"), "mandatory-depender.jpi");
                         }
                     }
                 };
@@ -71,69 +74,89 @@ public class PluginManagerInstalledGUITest {
             }
         }
     };
-    
+
+    @Issue("JENKINS-33843")
     @Test
     public void test_enable_disable_uninstall() throws IOException, SAXException {
         InstalledPlugins installedPlugins = new InstalledPlugins();
-        
-        InstalledPlugin tasksPlugin = installedPlugins.get("tasks");
-        InstalledPlugin cvsPlugin = installedPlugins.get("cvs");
 
-        tasksPlugin.assertHasNoDependants();
-        cvsPlugin.assertHasDependants();
-        
-        // Tasks plugin should be enabled and it should be possible to disable it
+        InstalledPlugin matrixAuthPlugin = installedPlugins.get("matrix-auth");
+        InstalledPlugin dependeePlugin = installedPlugins.get("dependee");
+        InstalledPlugin dependerPlugin = installedPlugins.get("depender");
+        InstalledPlugin mandatoryDependerPlugin = installedPlugins.get("mandatory-depender");
+
+        // As a detached plugin, it is an optional dependency of others built against a newer baseline.
+        matrixAuthPlugin.assertHasNoDependents();
+        // Has a mandatory dependency:
+        dependeePlugin.assertHasDependents();
+        // Leaf plugins:
+        dependerPlugin.assertHasNoDependents();
+        mandatoryDependerPlugin.assertHasNoDependents();
+
+        // This plugin should be enabled and it should be possible to disable it
         // because no other plugins depend on it.
-        tasksPlugin.assertEnabled();
-        tasksPlugin.assertEnabledStateChangeable();
-        tasksPlugin.assertUninstallable();
-        
-        // CVS plugin should be enabled, but it should not be possible to disable or uninstall it
-        // because the tasks plugin depends on it.
-        cvsPlugin.assertEnabled();
-        cvsPlugin.assertEnabledStateNotChangeable();
-        cvsPlugin.assertNotUninstallable();
-        
-        // Disable the tasks plugin
-        tasksPlugin.clickEnabledWidget();
-                
-        // Now the tasks plugin should be disabled, but it should be possible to re-enable it 
+        mandatoryDependerPlugin.assertEnabled();
+        mandatoryDependerPlugin.assertEnabledStateChangeable();
+        mandatoryDependerPlugin.assertUninstallable();
+
+        // This plugin should be enabled, but it should not be possible to disable or uninstall it
+        // because another plugin depends on it.
+        dependeePlugin.assertEnabled();
+        dependeePlugin.assertEnabledStateNotChangeable();
+        dependeePlugin.assertNotUninstallable();
+
+        // Disable one plugin
+        mandatoryDependerPlugin.clickEnabledWidget();
+
+        // Now that plugin should be disabled, but it should be possible to re-enable it
         // and it should still be uninstallable.
-        tasksPlugin.assertNotEnabled(); // this is different to earlier
-        tasksPlugin.assertEnabledStateChangeable();
-        tasksPlugin.assertUninstallable();
-                
-        // The CVS plugin should still be enabled, but it should now be possible to disable it because
-        // the tasks plugin is no longer enabled. Should still not be possible to uninstall it.
-        cvsPlugin.assertEnabled();
-        cvsPlugin.assertEnabledStateChangeable(); // this is different to earlier
-        cvsPlugin.assertNotUninstallable();
-        
-        // Disable the cvs plugin
-        cvsPlugin.clickEnabledWidget();
-        
-        // Now it should NOT be possible to change the enable state of the tasks plugin because one
-        // of the plugins it depends on (the CVS plugin) is not enabled.
-        tasksPlugin.assertNotEnabled();
-        tasksPlugin.assertEnabledStateNotChangeable();  // this is different to earlier
-        tasksPlugin.assertUninstallable();
+        mandatoryDependerPlugin.assertNotEnabled(); // this is different to earlier
+        mandatoryDependerPlugin.assertEnabledStateChangeable();
+        mandatoryDependerPlugin.assertUninstallable();
+
+        // The dependee plugin should still be enabled, but it should now be possible to disable it because
+        // the mandatory depender plugin is no longer enabled. Should still not be possible to uninstall it.
+        // Note that the depender plugin does not block its disablement.
+        dependeePlugin.assertEnabled();
+        dependeePlugin.assertEnabledStateChangeable(); // this is different to earlier
+        dependeePlugin.assertNotUninstallable();
+        dependerPlugin.assertEnabled();
+
+        // Disable the dependee plugin
+        dependeePlugin.clickEnabledWidget();
+
+        // Now it should NOT be possible to change the enable state of the depender plugin because one
+        // of the plugins it depends on is not enabled.
+        mandatoryDependerPlugin.assertNotEnabled();
+        mandatoryDependerPlugin.assertEnabledStateNotChangeable();  // this is different to earlier
+        mandatoryDependerPlugin.assertUninstallable();
+        dependerPlugin.assertEnabled();
+
+        // You can disable a detached plugin if there is no explicit dependency on it.
+        matrixAuthPlugin.assertEnabled();
+        matrixAuthPlugin.assertEnabledStateChangeable();
+        matrixAuthPlugin.assertUninstallable();
+        matrixAuthPlugin.clickEnabledWidget();
+        matrixAuthPlugin.assertNotEnabled();
+        matrixAuthPlugin.assertEnabledStateChangeable();
+        matrixAuthPlugin.assertUninstallable();
     }
-    
+
     private class InstalledPlugins {
-        
+
         private final List<InstalledPlugin> installedPlugins;
 
-        private InstalledPlugins () throws IOException, SAXException {
+        private InstalledPlugins() throws IOException, SAXException {
             JenkinsRule.WebClient webClient = jenkinsRule.createWebClient();
             HtmlPage installedPage = webClient.goTo("pluginManager/installed");
-            
+
             // Note for debugging... simply print installedPage to get the JenkinsRule
             // Jenkins URL and then add a long Thread.sleep here. It's useful re being
             // able to see what the code is testing.
 
             DomElement pluginsTable = installedPage.getElementById("plugins");
             HtmlElement tbody = pluginsTable.getElementsByTagName("TBODY").get(0);
-            
+
             installedPlugins = new ArrayList<>();
             for (DomElement htmlTableRow : tbody.getChildElements()) {
                 installedPlugins.add(new InstalledPlugin((HtmlTableRow) htmlTableRow));
@@ -146,7 +169,7 @@ public class PluginManagerInstalledGUITest {
                     return plugin;
                 }
             }
-            Assert.fail("Now pluginManager/installed row for plugin " + pluginId);
+            Assert.fail("No pluginManager/installed row for plugin " + pluginId);
             return null;
         }
 
@@ -156,20 +179,20 @@ public class PluginManagerInstalledGUITest {
 
         private final HtmlTableRow pluginRow;
 
-        public InstalledPlugin(HtmlTableRow pluginRow) {
+        InstalledPlugin(HtmlTableRow pluginRow) {
             this.pluginRow = pluginRow;
         }
-        
+
         public String getId() {
             return pluginRow.getAttribute("data-plugin-id");
         }
-        
+
         public boolean isPlugin(String pluginId) {
             return pluginId.equals(getId());
         }
-        
+
         private HtmlInput getEnableWidget() {
-            HtmlElement input = pluginRow.getCells().get(0).getElementsByTagName("input").get(0);
+            HtmlElement input = pluginRow.getCells().get(1).getElementsByTagName("input").get(0);
             return (HtmlInput) input;
         }
 
@@ -189,41 +212,41 @@ public class PluginManagerInstalledGUITest {
         }
 
         public void assertEnabledStateChangeable() {
-            if (!hasDependants() && !hasDisabledDependency() && !allDependantsDisabled()) {
+            if (!hasDependents() && !hasDisabledDependency() && !allDependentsDisabled()) {
                 return;
             }
-            if (allDependantsDisabled() && !hasDisabledDependency()) {
+            if (allDependentsDisabled() && !hasDisabledDependency()) {
                 return;
             }
-            
+
             Assert.fail("The enable/disable state of plugin '" + getId() + "' cannot be changed.");
         }
 
         public void assertEnabledStateNotChangeable() {
-            if (hasDependants() && !hasDisabledDependency() && !allDependantsDisabled()) {
+            if (hasDependents() && !hasDisabledDependency() && !allDependentsDisabled()) {
                 return;
             }
-            if (!hasDependants() && hasDisabledDependency()) {
+            if (!hasDependents() && hasDisabledDependency()) {
                 return;
             }
-            
+
             Assert.fail("The enable/disable state of plugin '" + getId() + "' cannot be changed.");
         }
 
         public void assertUninstallable() {
-            Assert.assertFalse("Plugin '" + getId() + "' cannot be uninstalled.", hasDependants());
+            Assert.assertFalse("Plugin '" + getId() + "' cannot be uninstalled.", hasDependents());
         }
 
         public void assertNotUninstallable() {
-            Assert.assertTrue("Plugin '" + getId() + "' can be uninstalled.", hasDependants());
+            Assert.assertTrue("Plugin '" + getId() + "' can be uninstalled.", hasDependents());
         }
 
-        public void assertHasDependants() {
-            Assert.assertTrue(hasDependants());
+        public void assertHasDependents() {
+            Assert.assertTrue("Plugin '" + getId() + "' is expected to have dependents.", hasDependents());
         }
 
-        public void assertHasNoDependants() {
-            Assert.assertFalse(hasDependants());
+        public void assertHasNoDependents() {
+            Assert.assertFalse("Plugin '" + getId() + "' is expected to have no dependents.", hasDependents());
         }
 
         private boolean hasClassName(String className) {
@@ -236,12 +259,12 @@ public class PluginManagerInstalledGUITest {
             return hasClassName("has-disabled-dependency");
         }
 
-        private boolean allDependantsDisabled() {
-            return hasClassName("all-dependants-disabled");
+        private boolean allDependentsDisabled() {
+            return hasClassName("all-dependents-disabled");
         }
 
-        private boolean hasDependants() {
-            return hasClassName("has-dependants");
+        private boolean hasDependents() {
+            return hasClassName("has-dependents");
         }
     }
 }

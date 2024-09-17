@@ -21,17 +21,19 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
+
 package hudson.slaves;
 
 
-import jenkins.util.SystemProperties;
-import javax.annotation.concurrent.GuardedBy;
-import java.io.IOException;
-import java.util.logging.Logger;
+import static java.util.concurrent.TimeUnit.MINUTES;
+import static java.util.logging.Level.WARNING;
 
-import static java.util.concurrent.TimeUnit.*;
+import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
+import java.io.IOException;
 import java.util.logging.Level;
-import static java.util.logging.Level.*;
+import java.util.logging.Logger;
+import jenkins.util.SystemProperties;
+import net.jcip.annotations.GuardedBy;
 
 /**
  * {@link RetentionStrategy} implementation for {@link AbstractCloudComputer} that terminates
@@ -57,14 +59,12 @@ public class CloudRetentionStrategy extends RetentionStrategy<AbstractCloudCompu
                 LOGGER.log(Level.INFO, "Disconnecting {0}", c.getName());
                 try {
                     computerNode.terminate();
-                } catch (InterruptedException e) {
-                    LOGGER.log(WARNING, "Failed to terminate " + c.getName(), e);
-                } catch (IOException e) {
+                } catch (InterruptedException | IOException e) {
                     LOGGER.log(WARNING, "Failed to terminate " + c.getName(), e);
                 }
             }
         }
-        return 1;
+        return 0;
     }
 
     /**
@@ -77,5 +77,6 @@ public class CloudRetentionStrategy extends RetentionStrategy<AbstractCloudCompu
 
     private static final Logger LOGGER = Logger.getLogger(CloudRetentionStrategy.class.getName());
 
-    public static boolean disabled = SystemProperties.getBoolean(CloudRetentionStrategy.class.getName()+".disabled");
+    @SuppressFBWarnings(value = "MS_SHOULD_BE_FINAL", justification = "Accessible via System Groovy Scripts")
+    public static boolean disabled = SystemProperties.getBoolean(CloudRetentionStrategy.class.getName() + ".disabled");
 }

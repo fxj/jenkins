@@ -21,13 +21,16 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
+
 package hudson.model;
 
 import hudson.DescriptorExtensionList;
 import hudson.ExtensionPoint;
+import hudson.Util;
 import jenkins.model.Jenkins;
 import net.sf.json.JSONObject;
 import org.kohsuke.stapler.StaplerRequest;
+import org.kohsuke.stapler.StaplerRequest2;
 
 /**
  * Extensible property of {@link View}.
@@ -38,9 +41,9 @@ import org.kohsuke.stapler.StaplerRequest;
  * persisted with the view object.
  *
  * <p>
- * Configuration screen should be defined in <code>config.jelly</code>.
+ * Configuration screen should be defined in {@code config.jelly}.
  * Within this page, the {@link ViewProperty} instance is available as
- * the <code>instance</code> EL variable (while the <code>it</code> EL variable
+ * the {@code instance} EL variable (while the {@code it} EL variable
  * refers to the {@link View}.
  *
  * @author Stephen Connolly
@@ -58,15 +61,31 @@ public class ViewProperty implements ReconfigurableDescribable<ViewProperty>, Ex
         this.view = view;
     }
 
+    @Override
     public ViewPropertyDescriptor getDescriptor() {
-        return (ViewPropertyDescriptor) Jenkins.getInstance().getDescriptorOrDie(getClass());
+        return (ViewPropertyDescriptor) Jenkins.get().getDescriptorOrDie(getClass());
     }
 
-    public static DescriptorExtensionList<ViewProperty,ViewPropertyDescriptor> all() {
-        return Jenkins.getInstance().<ViewProperty,ViewPropertyDescriptor>getDescriptorList(ViewProperty.class);
+    public static DescriptorExtensionList<ViewProperty, ViewPropertyDescriptor> all() {
+        return Jenkins.get().getDescriptorList(ViewProperty.class);
     }
 
+    @Override
+    public ViewProperty reconfigure(StaplerRequest2 req, JSONObject form) throws Descriptor.FormException {
+        if (Util.isOverridden(ViewProperty.class, getClass(), "reconfigure", StaplerRequest.class, JSONObject.class)) {
+            return reconfigure(StaplerRequest.fromStaplerRequest2(req), form);
+        } else {
+            return reconfigureImpl(req, form);
+        }
+    }
+
+    @Deprecated
+    @Override
     public ViewProperty reconfigure(StaplerRequest req, JSONObject form) throws Descriptor.FormException {
-    	return form==null ? null : getDescriptor().newInstance(req, form);
+        return reconfigureImpl(StaplerRequest.toStaplerRequest2(req), form);
+    }
+
+    private ViewProperty reconfigureImpl(StaplerRequest2 req, JSONObject form) throws Descriptor.FormException {
+        return form == null ? null : getDescriptor().newInstance(req, form);
     }
 }

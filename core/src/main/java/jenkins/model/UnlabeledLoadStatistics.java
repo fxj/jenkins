@@ -21,6 +21,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
+
 package jenkins.model;
 
 import hudson.model.Computer;
@@ -32,7 +33,6 @@ import hudson.model.Queue;
 import hudson.model.Queue.Task;
 import hudson.model.queue.SubTask;
 import hudson.util.Iterators;
-
 import java.util.Iterator;
 
 /**
@@ -54,8 +54,8 @@ public class UnlabeledLoadStatistics extends LoadStatistics {
 
     @Override
     public int computeIdleExecutors() {
-        int r=0;
-        for (Computer c : Jenkins.getInstance().getComputers()) {
+        int r = 0;
+        for (Computer c : Jenkins.get().getComputers()) {
             Node node = c.getNode();
             if (node != null && node.getMode() == Mode.NORMAL && (c.isOnline() || c.isConnecting()) && c.isAcceptingTasks()) {
                 r += c.countIdle();
@@ -66,8 +66,8 @@ public class UnlabeledLoadStatistics extends LoadStatistics {
 
     @Override
     public int computeTotalExecutors() {
-        int r=0;
-        for (Computer c : Jenkins.getInstance().getComputers()) {
+        int r = 0;
+        for (Computer c : Jenkins.get().getComputers()) {
             Node node = c.getNode();
             if (node != null && node.getMode() == Mode.NORMAL && c.isOnline()) {
                 r += c.countExecutors();
@@ -78,7 +78,7 @@ public class UnlabeledLoadStatistics extends LoadStatistics {
 
     @Override
     public int computeQueueLength() {
-        return Jenkins.getInstance().getQueue().strictCountBuildableItemsFor(null);
+        return Jenkins.get().getQueue().strictCountBuildableItemsFor(null);
     }
 
     @Override
@@ -102,7 +102,7 @@ public class UnlabeledLoadStatistics extends LoadStatistics {
     private static class UnlabeledNodesIterator extends Iterators.FilterIterator<Node> {
 
         protected UnlabeledNodesIterator() {
-            super(Jenkins.getActiveInstance().getNodes().iterator());
+            super(Jenkins.get().getNodes().iterator());
         }
 
         @Override
@@ -110,6 +110,7 @@ public class UnlabeledLoadStatistics extends LoadStatistics {
             return n != null && n.getMode() == Mode.NORMAL;
         }
 
+        @Override
         public void remove() {
             // why does Iterators.FilterIterator do the stupid thing and allow remove?
             // (remove should remove the object last returned by next(), but it won't if hasNext() is called

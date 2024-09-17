@@ -21,30 +21,32 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
+
 package hudson.slaves;
 
 import com.google.common.annotations.VisibleForTesting;
+import edu.umd.cs.findbugs.annotations.CheckForNull;
 import hudson.Extension;
 import hudson.FilePath;
-import jenkins.util.SystemProperties;
 import hudson.model.Computer;
 import hudson.model.Slave;
 import hudson.model.TaskListener;
 import hudson.remoting.Channel;
 import hudson.remoting.PingThread;
-import jenkins.security.MasterToSlaveCallable;
-import jenkins.slaves.PingFailureAnalyzer;
-import org.kohsuke.accmod.Restricted;
-import org.kohsuke.accmod.restrictions.NoExternalUse;
-
-import javax.annotation.CheckForNull;
 import java.io.IOException;
+import java.util.Objects;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import jenkins.security.MasterToSlaveCallable;
+import jenkins.slaves.PingFailureAnalyzer;
+import jenkins.util.SystemProperties;
+import org.kohsuke.accmod.Restricted;
+import org.kohsuke.accmod.restrictions.NoExternalUse;
 
 /**
- * Establish a periodic ping to keep connections between {@link Slave slaves}
+ * Establish a periodic ping to keep connections between {@link Slave agents}
  * and the main Jenkins node alive. This prevents network proxies from
  * terminating connections that are idle for too long.
  *
@@ -54,7 +56,7 @@ import java.util.logging.Logger;
 public class ChannelPinger extends ComputerListener {
     static final int PING_TIMEOUT_SECONDS_DEFAULT = 4 * 60;
     static final int PING_INTERVAL_SECONDS_DEFAULT = 5 * 60;
-    
+
     private static final Logger LOGGER = Logger.getLogger(ChannelPinger.class.getName());
     private static final String TIMEOUT_SECONDS_PROPERTY = ChannelPinger.class.getName() + ".pingTimeoutSeconds";
     private static final String INTERVAL_MINUTES_PROPERTY_DEPRECATED = ChannelPinger.class.getName() + ".pingInterval";
@@ -71,18 +73,18 @@ public class ChannelPinger extends ComputerListener {
     private int pingIntervalSeconds = PING_INTERVAL_SECONDS_DEFAULT;
 
     public ChannelPinger() {
-        
+
         Integer interval = SystemProperties.getInteger(INTERVAL_SECONDS_PROPERTY, null, Level.WARNING);
-        
+
         // if interval wasn't set we read the deprecated property in minutes
         if (interval == null) {
-            interval = SystemProperties.getInteger(INTERVAL_MINUTES_PROPERTY_DEPRECATED,null, Level.WARNING);
+            interval = SystemProperties.getInteger(INTERVAL_MINUTES_PROPERTY_DEPRECATED, null, Level.WARNING);
             if (interval != null) {
                 LOGGER.warning(INTERVAL_MINUTES_PROPERTY_DEPRECATED + " property is deprecated, " + INTERVAL_SECONDS_PROPERTY + " should be used");
-                interval *= 60; //to seconds       
+                interval *= 60; //to seconds
             }
         }
-        
+
         if (interval != null) {
             pingIntervalSeconds = interval;
         }
@@ -143,11 +145,7 @@ public class ChannelPinger extends ComputerListener {
 
         @Override
         public int hashCode() {
-            final int prime = 31;
-            int result = 1;
-            result = prime * result + pingIntervalSeconds;
-            result = prime * result + pingTimeoutSeconds;
-            return result;
+            return Objects.hash(pingIntervalSeconds, pingTimeoutSeconds);
         }
 
         @Override
@@ -165,10 +163,7 @@ public class ChannelPinger extends ComputerListener {
             if (pingIntervalSeconds != other.pingIntervalSeconds) {
                 return false;
             }
-            if (pingTimeoutSeconds != other.pingTimeoutSeconds) {
-                return false;
-            }
-            return true;
+            return pingTimeoutSeconds == other.pingTimeoutSeconds;
         }
 
         protected Object readResolve() {
@@ -184,7 +179,7 @@ public class ChannelPinger extends ComputerListener {
     public static void setUpPingForChannel(final Channel channel, final SlaveComputer computer, int timeoutSeconds, int intervalSeconds, final boolean analysis) {
         LOGGER.log(Level.FINE, "setting up ping on {0} with a {1} seconds interval and {2} seconds timeout", new Object[] {channel.getName(), intervalSeconds, timeoutSeconds});
         final AtomicBoolean isInClosed = new AtomicBoolean(false);
-        final PingThread t = new PingThread(channel, timeoutSeconds * 1000L, intervalSeconds * 1000L) {
+        final PingThread t = new PingThread(channel, TimeUnit.SECONDS.toMillis(timeoutSeconds), TimeUnit.SECONDS.toMillis(intervalSeconds)) {
             @Override
             protected void onDead(Throwable cause) {
                     if (analysis) {
@@ -193,16 +188,25 @@ public class ChannelPinger extends ComputerListener {
                     boolean inClosed = isInClosed.get();
                     // Disassociate computer channel before closing it
                     if (computer != null) {
-                        Exception exception = cause instanceof Exception ? (Exception) cause: new IOException(cause);
+                        Exception exception = cause instanceof Exception ? (Exception) cause : new IOException(cause);
                         computer.disconnect(new OfflineCause.ChannelTermination(exception));
                     }
                     if (inClosed) {
-                        LOGGER.log(Level.FINE,"Ping failed after the channel "+channel.getName()+" is already partially closed.",cause);
+                        LOGGER.log(Level.FINE, "Ping failed after the channel " + channel.getName() + " is already partially closed.", cause);
                     } else {
-                        LOGGER.log(Level.INFO,"Ping failed. Terminating the channel "+channel.getName()+".",cause);
+                        LOGGER.log(Level.INFO, "Ping failed. Terminating the channel " + channel.getName() + ".", cause);
+                        if (computer == null) {
+                            // Disconnect from agent side.
+                            try {
+                                channel.close(cause);
+                            } catch (IOException x) {
+                                LOGGER.log(Level.WARNING, "could not disconnect " + channel.getName(), x);
+                            }
+                        }
                     }
             }
             /** Keep in a separate method so we do not even try to do class loading on {@link PingFailureAnalyzer} from an agent JVM. */
+
             private void analyze(Throwable cause) {
                 for (PingFailureAnalyzer pfa : PingFailureAnalyzer.all()) {
                     try {
@@ -212,6 +216,7 @@ public class ChannelPinger extends ComputerListener {
                     }
                 }
             }
+
             @Deprecated
             @Override
             protected void onDead() {

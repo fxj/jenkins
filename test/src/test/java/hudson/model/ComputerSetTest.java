@@ -21,18 +21,34 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
+
 package hudson.model;
 
-import com.gargoylesoftware.htmlunit.html.HtmlForm;
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.contains;
+import static org.hamcrest.Matchers.containsInAnyOrder;
+import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.empty;
+import static org.hamcrest.Matchers.is;
+import static org.hamcrest.Matchers.not;
+import static org.junit.Assert.assertEquals;
+
 import hudson.cli.CLICommandInvoker;
 import hudson.slaves.DumbSlave;
-import static org.hamcrest.Matchers.*;
-import static org.junit.Assert.*;
+import hudson.slaves.OfflineCause;
+import java.net.HttpURLConnection;
+import jenkins.model.Jenkins;
+import jenkins.widgets.ExecutorsWidget;
+import jenkins.widgets.HasWidgetHelper;
+import org.htmlunit.Page;
+import org.htmlunit.html.HtmlForm;
+import org.htmlunit.html.HtmlPage;
 import org.junit.Rule;
 import org.junit.Test;
 import org.jvnet.hudson.test.Issue;
 import org.jvnet.hudson.test.JenkinsRule;
 import org.jvnet.hudson.test.JenkinsRule.WebClient;
+import org.jvnet.hudson.test.MockAuthorizationStrategy;
 
 /**
  * @author Kohsuke Kawaguchi
@@ -79,5 +95,90 @@ public class ComputerSetTest {
         assertThat(ComputerSet.getComputerNames(), contains("aNode"));
         j.createSlave("anAnotherNode", "", null);
         assertThat(ComputerSet.getComputerNames(), containsInAnyOrder("aNode", "anAnotherNode"));
+    }
+
+    @Test
+    public void managePermissionCanConfigure() throws Exception {
+        final String USER = "user";
+        final String MANAGER = "manager";
+        j.jenkins.setSecurityRealm(j.createDummySecurityRealm());
+        j.jenkins.setAuthorizationStrategy(new MockAuthorizationStrategy()
+                // Read access
+                .grant(Jenkins.READ).everywhere().to(USER)
+
+                // Read and Manage
+                .grant(Jenkins.READ).everywhere().to(MANAGER)
+                .grant(Jenkins.MANAGE).everywhere().to(MANAGER)
+        );
+
+        JenkinsRule.WebClient wc = j.createWebClient()
+                .withThrowExceptionOnFailingStatusCode(false);
+
+        // Jenkins.READ can access /computer but not /computer/configure
+        wc.login(USER);
+        HtmlPage page = wc.goTo("computer/");
+        assertEquals(HttpURLConnection.HTTP_OK, page.getWebResponse().getStatusCode());
+        String responseContent = page.getWebResponse().getContentAsString();
+        // the "Node Monitoring" link in the app bar is not visible
+        assertThat(responseContent, not(containsString("Node Monitoring")));
+        page = wc.goTo("computer/configure");
+        assertEquals(HttpURLConnection.HTTP_FORBIDDEN, page.getWebResponse().getStatusCode());
+
+        // Jenkins.MANAGER can access /computer and /computer/configure
+        wc.login(MANAGER);
+        page = wc.goTo("computer/");
+        assertEquals(HttpURLConnection.HTTP_OK, page.getWebResponse().getStatusCode());
+        responseContent = page.getWebResponse().getContentAsString();
+        // the "Node Monitoring" link in the app bar is visible
+        assertThat(responseContent, containsString("Configure Monitors"));
+        page = wc.goTo("computer/configure");
+        assertEquals(HttpURLConnection.HTTP_OK, page.getWebResponse().getStatusCode());
+        // and the save button is visible
+        responseContent = page.getWebResponse().getContentAsString();
+        assertThat(responseContent, containsString("Save"));
+    }
+
+    @Test
+    @Issue("SECURITY-2120")
+    public void testTerminatedNodeStatusPageDoesNotShowTrace() throws Exception {
+        DumbSlave agent = j.createOnlineSlave();
+        FreeStyleProject p = j.createFreeStyleProject();
+        p.setAssignedNode(agent);
+
+        FreeStyleBuild b = ExecutorTest.startBlockingBuild(p);
+
+        String message = "It went away";
+        b.getBuiltOn().toComputer().disconnect(
+                new OfflineCause.ChannelTermination(new RuntimeException(message))
+        );
+
+        WebClient wc = j.createWebClient();
+        Page page = wc.getPage(wc.createCrumbedUrl(agent.toComputer().getUrl()));
+        String content = page.getWebResponse().getContentAsString();
+        assertThat(content, not(containsString(message)));
+
+        j.assertBuildStatus(Result.FAILURE, j.waitForCompletion(b));
+    }
+
+    @Test
+    @Issue("SECURITY-2120")
+    public void testTerminatedNodeAjaxExecutorsDoesNotShowTrace() throws Exception {
+        DumbSlave agent = j.createOnlineSlave();
+        FreeStyleProject p = j.createFreeStyleProject();
+        p.setAssignedNode(agent);
+
+        FreeStyleBuild b = ExecutorTest.startBlockingBuild(p);
+
+        String message = "It went away";
+        b.getBuiltOn().toComputer().disconnect(
+                new OfflineCause.ChannelTermination(new RuntimeException(message))
+        );
+
+        WebClient wc = j.createWebClient();
+        Page page = wc.getPage(wc.createCrumbedUrl(HasWidgetHelper.getWidget(j.jenkins.getComputer(), ExecutorsWidget.class).orElseThrow().getUrl() + "ajax"));
+        String content = page.getWebResponse().getContentAsString();
+        assertThat(content, not(containsString(message)));
+
+        j.assertBuildStatus(Result.FAILURE, j.waitForCompletion(b));
     }
 }

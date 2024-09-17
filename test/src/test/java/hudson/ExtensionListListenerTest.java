@@ -21,6 +21,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
+
 package hudson;
 
 import jenkins.model.TransientActionFactory;
@@ -56,8 +57,9 @@ public class ExtensionListListenerTest {
         Assert.assertEquals(1, listListener.onChangeCallCount);
     }
 
-    private class MyExtensionListListener extends ExtensionListListener {
+    private static class MyExtensionListListener extends ExtensionListListener {
         private int onChangeCallCount = 0;
+
         @Override
         public void onChange() {
             onChangeCallCount++;

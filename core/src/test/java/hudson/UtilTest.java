@@ -22,50 +22,51 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
+
 package hudson;
 
-import java.text.ParseException;
-import java.text.SimpleDateFormat;
-import java.util.Date;
-import java.util.List;
-import java.util.Map;
-import java.util.HashMap;
-import java.util.Locale;
-import java.util.Properties;
-import java.util.concurrent.Callable;
-import java.util.concurrent.atomic.AtomicReference;
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.not;
+import static org.hamcrest.Matchers.startsWith;
+import static org.junit.Assert.assertArrayEquals;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
+import static org.junit.Assume.assumeFalse;
+import static org.junit.Assume.assumeNoException;
+import static org.junit.Assume.assumeTrue;
+
+import hudson.model.TaskListener;
+import hudson.os.WindowsUtil;
+import hudson.util.StreamTaskListener;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
-import java.io.FileInputStream;
 import java.io.IOException;
-import java.io.InputStream;
+import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.FileSystemException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.nio.file.attribute.PosixFilePermissions;
-
-import static org.hamcrest.CoreMatchers.allOf;
-import static org.hamcrest.CoreMatchers.containsString;
-import static org.hamcrest.CoreMatchers.hasItem;
-import static org.hamcrest.CoreMatchers.instanceOf;
-import static org.hamcrest.CoreMatchers.is;
-import static org.hamcrest.CoreMatchers.not;
-import static org.hamcrest.CoreMatchers.startsWith;
-import static org.junit.Assert.*;
-
+import java.text.ParseException;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Properties;
 import org.apache.commons.io.FileUtils;
 import org.hamcrest.BaseMatcher;
 import org.hamcrest.Description;
-import org.junit.Assume;
-import org.junit.Test;
-import org.jvnet.hudson.test.Issue;
-
-import hudson.util.StreamTaskListener;
-
+import org.junit.Assert;
 import org.junit.Rule;
+import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
-
-import com.google.common.collect.Lists;
+import org.jvnet.hudson.test.Issue;
 
 /**
  * @author Kohsuke Kawaguchi
@@ -76,37 +77,37 @@ public class UtilTest {
 
     @Test
     public void testReplaceMacro() {
-        Map<String,String> m = new HashMap<String,String>();
-        m.put("A","a");
-        m.put("A.B","a-b");
-        m.put("AA","aa");
-        m.put("B","B");
+        Map<String, String> m = new HashMap<>();
+        m.put("A", "a");
+        m.put("A.B", "a-b");
+        m.put("AA", "aa");
+        m.put("B", "B");
         m.put("DOLLAR", "$");
         m.put("ENCLOSED", "a${A}");
 
         // longest match
-        assertEquals("aa",Util.replaceMacro("$AA",m));
+        assertEquals("aa", Util.replaceMacro("$AA", m));
 
         // invalid keys are ignored
-        assertEquals("$AAB",Util.replaceMacro("$AAB",m));
+        assertEquals("$AAB", Util.replaceMacro("$AAB", m));
 
-        assertEquals("aaB",Util.replaceMacro("${AA}B",m));
-        assertEquals("${AAB}",Util.replaceMacro("${AAB}",m));
+        assertEquals("aaB", Util.replaceMacro("${AA}B", m));
+        assertEquals("${AAB}", Util.replaceMacro("${AAB}", m));
 
         // $ escaping
-        assertEquals("asd$${AA}dd", Util.replaceMacro("asd$$$${AA}dd",m));
-        assertEquals("$", Util.replaceMacro("$$",m));
-        assertEquals("$$", Util.replaceMacro("$$$$",m));
+        assertEquals("asd$${AA}dd", Util.replaceMacro("asd$$$${AA}dd", m));
+        assertEquals("$", Util.replaceMacro("$$", m));
+        assertEquals("$$", Util.replaceMacro("$$$$", m));
 
         // dots
         assertEquals("a.B", Util.replaceMacro("$A.B", m));
         assertEquals("a-b", Util.replaceMacro("${A.B}", m));
 
-    	// test that more complex scenarios work
-        assertEquals("/a/B/aa", Util.replaceMacro("/$A/$B/$AA",m));
-        assertEquals("a-aa", Util.replaceMacro("$A-$AA",m));
-        assertEquals("/a/foo/can/B/you-believe_aa~it?", Util.replaceMacro("/$A/foo/can/$B/you-believe_$AA~it?",m));
-        assertEquals("$$aa$Ba${A}$it", Util.replaceMacro("$$$DOLLAR${AA}$$B${ENCLOSED}$it",m));
+        // test that more complex scenarios work
+        assertEquals("/a/B/aa", Util.replaceMacro("/$A/$B/$AA", m));
+        assertEquals("a-aa", Util.replaceMacro("$A-$AA", m));
+        assertEquals("/a/foo/can/B/you-believe_aa~it?", Util.replaceMacro("/$A/foo/can/$B/you-believe_$AA~it?", m));
+        assertEquals("$$aa$Ba${A}$it", Util.replaceMacro("$$$DOLLAR${AA}$$B${ENCLOSED}$it", m));
     }
 
     @Test
@@ -123,7 +124,7 @@ public class UtilTest {
         // 11.25 years - Check that if the first unit has 2 or more digits, a second unit isn't used.
         assertEquals(Messages.Util_year(11), Util.getTimeSpanString(354780000000L));
         // 9.25 years - Check that if the first unit has only 1 digit, a second unit is used.
-        assertEquals(Messages.Util_year(9)+ " " + Messages.Util_month(3), Util.getTimeSpanString(291708000000L));
+        assertEquals(Messages.Util_year(9) + " " + Messages.Util_month(3), Util.getTimeSpanString(291708000000L));
         // 67 seconds
         assertEquals(Messages.Util_minute(1) + " " + Messages.Util_second(7), Util.getTimeSpanString(67000L));
         // 17 seconds - Check that times less than a minute only use seconds.
@@ -138,7 +139,7 @@ public class UtilTest {
         assertEquals(Messages.Util_millisecond(17), Util.getTimeSpanString(17L));
         // 1ms
         assertEquals(Messages.Util_millisecond(1), Util.getTimeSpanString(1L));
-        // Test HUDSON-2843 (locale with comma as fraction separator got exception for <10 sec)
+        // Test JENKINS-2843 (locale with comma as fraction separator got exception for <10 sec)
         Locale saveLocale = Locale.getDefault();
         Locale.setDefault(Locale.GERMANY);
         try {
@@ -157,7 +158,7 @@ public class UtilTest {
     public void testEncodeSpaces() {
         final String urlWithSpaces = "http://hudson/job/Hudson Job";
         String encoded = Util.encode(urlWithSpaces);
-        assertEquals(encoded, "http://hudson/job/Hudson%20Job");
+        assertEquals("http://hudson/job/Hudson%20Job", encoded);
     }
 
     /**
@@ -166,15 +167,53 @@ public class UtilTest {
     @Test
     public void testRawEncode() {
         String[] data = {  // Alternating raw,encoded
-            "abcdefghijklmnopqrstuvwxyz", "abcdefghijklmnopqrstuvwxyz",
-            "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
-            "01234567890!@$&*()-_=+',.", "01234567890!@$&*()-_=+',.",
-            " \"#%/:;<>?", "%20%22%23%25%2F%3A%3B%3C%3E%3F",
-            "[\\]^`{|}~", "%5B%5C%5D%5E%60%7B%7C%7D%7E",
-            "d\u00E9velopp\u00E9s", "d%C3%A9velopp%C3%A9s",
+            "abcdefghijklmnopqrstuvwxyz",
+            "abcdefghijklmnopqrstuvwxyz",
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+            "01234567890!@$&*()-_=+',.",
+            "01234567890!@$&*()-_=+',.",
+            " \"#%/:;<>?",
+            "%20%22%23%25%2F%3A%3B%3C%3E%3F",
+            "[\\]^`{|}~",
+            "%5B%5C%5D%5E%60%7B%7C%7D%7E",
+            "d\u00E9velopp\u00E9s",
+            "d%C3%A9velopp%C3%A9s",
+            "Foo \uD800\uDF98 Foo",
+            "Foo%20%F0%90%8E%98%20Foo",
+            "\u00E9 ",
+            "%C3%A9%20",
         };
         for (int i = 0; i < data.length; i += 2) {
             assertEquals("test " + i, data[i + 1], Util.rawEncode(data[i]));
+        }
+    }
+
+    /**
+     * Test the fullEncode() method.
+     */
+    @Test
+    public void testFullEncode() {
+        String[] data = {
+                "abcdefghijklmnopqrstuvwxyz",
+                "abcdefghijklmnopqrstuvwxyz",
+                "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+                "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+                "01234567890!@$&*()-_=+',.",
+                "01234567890%21%40%24%26%2A%28%29%2D%5F%3D%2B%27%2C%2E",
+                " \"#%/:;<>?",
+                "%20%22%23%25%2F%3A%3B%3C%3E%3F",
+                "[\\]^`{|}~",
+                "%5B%5C%5D%5E%60%7B%7C%7D%7E",
+                "d\u00E9velopp\u00E9s",
+                "d%C3%A9velopp%C3%A9s",
+                "Foo \uD800\uDF98 Foo",
+                "Foo%20%F0%90%8E%98%20Foo",
+                "\u00E9 ",
+                "%C3%A9%20",
+        };
+        for (int i = 0; i < data.length; i += 2) {
+            assertEquals("test " + i, data[i + 1], Util.fullEncode(data[i]));
         }
     }
 
@@ -191,36 +230,36 @@ public class UtilTest {
 
     @Test
     public void testSymlink() throws Exception {
-        Assume.assumeTrue(!Functions.isWindows());
+        assumeFalse(Functions.isWindows());
 
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        StreamTaskListener l = new StreamTaskListener(baos);
+        StreamTaskListener l = new StreamTaskListener(baos, Charset.defaultCharset());
         File d = tmp.getRoot();
         try {
             new FilePath(new File(d, "a")).touch(0);
             assertNull(Util.resolveSymlink(new File(d, "a")));
-            Util.createSymlink(d,"a","x", l);
-            assertEquals("a",Util.resolveSymlink(new File(d,"x")));
+            Util.createSymlink(d, "a", "x", l);
+            assertEquals("a", Util.resolveSymlink(new File(d, "x")));
 
             // test a long name
             StringBuilder buf = new StringBuilder(768);
-            for( int i=0; i<768; i++)
-                buf.append((char)('0'+(i%10)));
-            Util.createSymlink(d,buf.toString(),"x", l);
+            for (int i = 0; i < 768; i++)
+                buf.append((char) ('0' + (i % 10)));
+            Util.createSymlink(d, buf.toString(), "x", l);
 
-            String log = baos.toString();
-            if (log.length() > 0)
+            String log = baos.toString(Charset.defaultCharset());
+            if (!log.isEmpty())
                 System.err.println("log output: " + log);
 
-            assertEquals(buf.toString(),Util.resolveSymlink(new File(d,"x")));
+            assertEquals(buf.toString(), Util.resolveSymlink(new File(d, "x")));
 
 
             // test linking from another directory
-            File anotherDir = new File(d,"anotherDir");
-            assertTrue("Couldn't create "+anotherDir,anotherDir.mkdir());
+            File anotherDir = new File(d, "anotherDir");
+            assertTrue("Couldn't create " + anotherDir, anotherDir.mkdir());
 
-            Util.createSymlink(d,"a","anotherDir/link",l);
-            assertEquals("a",Util.resolveSymlink(new File(d,"anotherDir/link")));
+            Util.createSymlink(d, "a", "anotherDir/link", l);
+            assertEquals("a", Util.resolveSymlink(new File(d, "anotherDir/link")));
 
             // JENKINS-12331: either a bug in createSymlink or this isn't supposed to work:
             //assertTrue(Util.isSymlink(new File(d,"anotherDir/link")));
@@ -239,27 +278,27 @@ public class UtilTest {
 
     @Test
     public void testIsSymlink() throws IOException, InterruptedException {
-        Assume.assumeTrue(!Functions.isWindows());
+        assumeFalse(Functions.isWindows());
 
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        StreamTaskListener l = new StreamTaskListener(baos);
+        StreamTaskListener l = new StreamTaskListener(baos, Charset.defaultCharset());
         File d = tmp.getRoot();
         try {
             new FilePath(new File(d, "original")).touch(0);
             assertFalse(Util.isSymlink(new File(d, "original")));
-            Util.createSymlink(d,"original","link", l);
+            Util.createSymlink(d, "original", "link", l);
 
             assertTrue(Util.isSymlink(new File(d, "link")));
 
             // test linking to another directory
-            File dir = new File(d,"dir");
-            assertTrue("Couldn't create "+dir,dir.mkdir());
-            assertFalse(Util.isSymlink(new File(d,"dir")));
+            File dir = new File(d, "dir");
+            assertTrue("Couldn't create " + dir, dir.mkdir());
+            assertFalse(Util.isSymlink(new File(d, "dir")));
 
-            File anotherDir = new File(d,"anotherDir");
-            assertTrue("Couldn't create "+anotherDir,anotherDir.mkdir());
+            File anotherDir = new File(d, "anotherDir");
+            assertTrue("Couldn't create " + anotherDir, anotherDir.mkdir());
 
-            Util.createSymlink(d,"dir","anotherDir/symlinkDir",l);
+            Util.createSymlink(d, "dir", "anotherDir/symlinkDir", l);
             // JENKINS-12331: either a bug in createSymlink or this isn't supposed to work:
             // assertTrue(Util.isSymlink(new File(d,"anotherDir/symlinkDir")));
         } finally {
@@ -269,291 +308,38 @@ public class UtilTest {
 
     @Test
     public void testIsSymlink_onWindows_junction() throws Exception {
-        Assume.assumeTrue("Uses Windows-specific features", Functions.isWindows());
-        tmp.newFolder("targetDir");
+        assumeTrue("Uses Windows-specific features", Functions.isWindows());
+        File targetDir = tmp.newFolder("targetDir");
         File d = tmp.newFolder("dir");
-        Process p = new ProcessBuilder()
-                .directory(d)
-                .command("cmd.exe", "/C", "mklink /J junction ..\\targetDir")
-                .start();
-        Assume.assumeThat("unable to create junction", p.waitFor(), is(0));
-        assertTrue(Util.isSymlink(new File(d, "junction")));
+        File junction = WindowsUtil.createJunction(new File(d, "junction"), targetDir);
+        assertTrue(Util.isSymlink(junction));
     }
 
     @Test
-    public void testDeleteFile() throws Exception {
-        File f = tmp.newFile();
-        // Test: File is deleted
-        mkfiles(f);
-        Util.deleteFile(f);
-        assertFalse("f exists after calling Util.deleteFile", f.exists());
+    @Issue("JENKINS-55448")
+    public void testIsSymlink_ParentIsJunction() throws IOException, InterruptedException {
+        assumeTrue("Uses Windows-specific features", Functions.isWindows());
+        File targetDir = tmp.newFolder();
+        File file = new File(targetDir, "test-file");
+        new FilePath(file).touch(System.currentTimeMillis());
+        File dir = tmp.newFolder();
+        File junction = WindowsUtil.createJunction(new File(dir, "junction"), targetDir);
+
+        assertTrue(Util.isSymlink(junction));
+        assertFalse(Util.isSymlink(file));
     }
 
     @Test
-    public void testDeleteFile_onWindows() throws Exception {
-        Assume.assumeTrue(Functions.isWindows());
-        final int defaultDeletionMax = Util.DELETION_MAX;
-        try {
-            File f = tmp.newFile();
-            // Test: If we cannot delete a file, we throw explaining why
-            mkfiles(f);
-            lockFileForDeletion(f);
-            Util.DELETION_MAX = 1;
-            try {
-                Util.deleteFile(f);
-                fail("should not have been deletable");
-            } catch (IOException x) {
-                assertThat(calcExceptionHierarchy(x), hasItem(FileSystemException.class));
-                assertThat(x.getMessage(), containsString(f.getPath()));
-            }
-        } finally {
-            Util.DELETION_MAX = defaultDeletionMax;
-            unlockFilesForDeletion();
-        }
-    }
-
-    @Test
-    public void testDeleteFileReadOnly() throws Exception {
-        // Removing the calls to Util#makeWritable in Util#tryOnceDeleteFile should cause this test to fail.
-        Path file = tmp.newFolder().toPath().resolve("file.tmp");
-        Files.createDirectories(file.getParent());
-        Files.createFile(file);
-        // Using old IO so the test can run on Windows.
-        file.getParent().toFile().setWritable(false);
-        file.toFile().setWritable(false);
-        Util.deleteFile(file.toFile());
-        assertFalse(Files.exists(file));
-    }
-
-    @Test
-    public void testDeleteFileDoesNotExist() throws Exception {
-        Path file = tmp.newFolder().toPath().resolve("file.tmp");
-        assertFalse(Files.exists(file));
-        // Should not throw an exception.
-        Util.deleteFile(file.toFile());
-    }
-
-    @Test
-    public void testDeleteContentsRecursive() throws Exception {
-        final File dir = tmp.newFolder();
-        final File d1 = new File(dir, "d1");
-        final File d2 = new File(dir, "d2");
-        final File f1 = new File(dir, "f1");
-        final File d1f1 = new File(d1, "d1f1");
-        final File d2f2 = new File(d2, "d1f2");
-        // Test: Files and directories are deleted
-        mkdirs(dir, d1, d2);
-        mkfiles(f1, d1f1, d2f2);
-        Util.deleteContentsRecursive(dir);
-        assertTrue("dir exists", dir.exists());
-        assertFalse("d1 exists", d1.exists());
-        assertFalse("d2 exists", d2.exists());
-        assertFalse("f1 exists", f1.exists());
-    }
-
-    @Test
-    public void testDeleteContentsRecursive_onWindows() throws Exception {
-        Assume.assumeTrue(Functions.isWindows());
-        final File dir = tmp.newFolder();
-        final File d1 = new File(dir, "d1");
-        final File d2 = new File(dir, "d2");
-        final File f1 = new File(dir, "f1");
-        final File d1f1 = new File(d1, "d1f1");
-        final File d2f2 = new File(d2, "d1f2");
-        final int defaultDeletionMax = Util.DELETION_MAX;
-        final int defaultDeletionWait = Util.WAIT_BETWEEN_DELETION_RETRIES;
-        final boolean defaultDeletionGC = Util.GC_AFTER_FAILED_DELETE;
-        try {
-            // Test: If we cannot delete a file, we throw
-            // but still deletes everything it can
-            // even if we are not retrying deletes.
-            mkdirs(dir, d1, d2);
-            mkfiles(f1, d1f1, d2f2);
-            lockFileForDeletion(d1f1);
-            Util.GC_AFTER_FAILED_DELETE = false;
-            Util.DELETION_MAX = 2;
-            Util.WAIT_BETWEEN_DELETION_RETRIES = 0;
-            try {
-                Util.deleteContentsRecursive(dir);
-                fail("Expected IOException");
-            } catch (IOException x) {
-                assertFalse("d2 should not exist", d2.exists());
-                assertFalse("f1 should not exist", f1.exists());
-                assertFalse("d1f2 should not exist", d2f2.exists());
-                assertThat(x.getMessage(), containsString(dir.getPath()));
-                assertThat(x.getMessage(), allOf(not(containsString("interrupted")), containsString("Tried 2 times (of a maximum of 2)."), not(containsString("garbage-collecting")), not(containsString("wait"))));
-            }
-        } finally {
-            Util.DELETION_MAX = defaultDeletionMax;
-            Util.WAIT_BETWEEN_DELETION_RETRIES = defaultDeletionWait;
-            Util.GC_AFTER_FAILED_DELETE = defaultDeletionGC;
-            unlockFilesForDeletion();
-        }
-    }
-
-    @Test
-    public void testDeleteRecursive() throws Exception {
-        final File dir = tmp.newFolder();
-        final File d1 = new File(dir, "d1");
-        final File d2 = new File(dir, "d2");
-        final File f1 = new File(dir, "f1");
-        final File d1f1 = new File(d1, "d1f1");
-        final File d2f2 = new File(d2, "d1f2");
-        // Test: Files and directories are deleted
-        mkdirs(dir, d1, d2);
-        mkfiles(f1, d1f1, d2f2);
-        Util.deleteRecursive(dir);
-        assertFalse("dir exists", dir.exists());
-    }
-
-    @Test
-    public void testDeleteRecursive_onWindows() throws Exception {
-        Assume.assumeTrue(Functions.isWindows());
-        final File dir = tmp.newFolder();
-        final File d1 = new File(dir, "d1");
-        final File d2 = new File(dir, "d2");
-        final File f1 = new File(dir, "f1");
-        final File d1f1 = new File(d1, "d1f1");
-        final File d2f2 = new File(d2, "d1f2");
-        final int defaultDeletionMax = Util.DELETION_MAX;
-        final int defaultDeletionWait = Util.WAIT_BETWEEN_DELETION_RETRIES;
-        final boolean defaultDeletionGC = Util.GC_AFTER_FAILED_DELETE;
-        try {
-            // Test: If we cannot delete a file, we throw
-            // but still deletes everything it can
-            // even if we are not retrying deletes.
-        	// (And when we are not retrying deletes,
-        	// we do not do the "between retries" delay)
-            mkdirs(dir, d1, d2);
-            mkfiles(f1, d1f1, d2f2);
-            lockFileForDeletion(d1f1);
-            Util.GC_AFTER_FAILED_DELETE = false;
-            Util.DELETION_MAX = 1;
-            Util.WAIT_BETWEEN_DELETION_RETRIES = 10000; // long enough to notice
-            long timeWhenDeletionStarted = System.currentTimeMillis();
-            try {
-                Util.deleteRecursive(dir);
-                fail("Expected IOException");
-            } catch (IOException x) {
-                long timeWhenDeletionEnded = System.currentTimeMillis();
-                assertTrue("dir exists", dir.exists());
-                assertTrue("d1 exists", d1.exists());
-                assertTrue("d1f1 exists", d1f1.exists());
-                assertFalse("d2 should not exist", d2.exists());
-                assertFalse("f1 should not exist", f1.exists());
-                assertFalse("d1f2 should not exist", d2f2.exists());
-                assertThat(x.getMessage(), containsString(dir.getPath()));
-                assertThat(x.getMessage(), allOf(not(containsString("interrupted")), not(containsString("maximum of")), not(containsString("garbage-collecting"))));
-                long actualTimeSpentDeleting = timeWhenDeletionEnded - timeWhenDeletionStarted;
-                assertTrue("did not wait - took " + actualTimeSpentDeleting + "ms", actualTimeSpentDeleting<1000L);
-            }
-            unlockFileForDeletion(d1f1);
-            // Deletes get retried if they fail 1st time around,
-            // allowing the operation to succeed on subsequent attempts.
-            // Note: This is what bug JENKINS-15331 is all about.
-            mkdirs(dir, d1, d2);
-            mkfiles(f1, d1f1, d2f2);
-            lockFileForDeletion(d2f2);
-            Util.DELETION_MAX=4;
-            Util.WAIT_BETWEEN_DELETION_RETRIES = 100;
-            Thread unlockAfterDelay = new Thread("unlockFileAfterDelay") {
-                public void run() {
-                    try {
-                        Thread.sleep(Util.WAIT_BETWEEN_DELETION_RETRIES);
-                        unlockFileForDeletion(d2f2);
-                    } catch( Exception x ) { /* ignored */ }
-                }
-            };
-            unlockAfterDelay.start();
-            Util.deleteRecursive(dir);
-            assertFalse("dir should have been deleted", dir.exists());
-            unlockAfterDelay.join();
-            // An interrupt aborts the delete and makes it fail, even
-            // if we had been told to retry a lot.
-            mkdirs(dir, d1, d2);
-            mkfiles(f1, d1f1, d2f2);
-            lockFileForDeletion(d1f1);
-            Util.DELETION_MAX=10;
-            Util.WAIT_BETWEEN_DELETION_RETRIES = -1000;
-            Util.GC_AFTER_FAILED_DELETE = true;
-            final AtomicReference<Throwable> thrown = new AtomicReference<Throwable>();
-            Thread deleteToBeInterrupted = new Thread("deleteToBeInterrupted") {
-                public void run() {
-                    try { Util.deleteRecursive(dir); }
-                    catch( Throwable x ) { thrown.set(x); }
-                }
-            };
-            deleteToBeInterrupted.start();
-            deleteToBeInterrupted.interrupt();
-            deleteToBeInterrupted.join(500);
-            assertFalse("deletion stopped", deleteToBeInterrupted.isAlive());
-            assertTrue("d1f1 still exists", d1f1.exists());
-            unlockFileForDeletion(d1f1);
-            Throwable deletionInterruptedEx = thrown.get();
-            assertThat(deletionInterruptedEx, instanceOf(IOException.class));
-            assertThat(deletionInterruptedEx.getMessage(), allOf(containsString("interrupted"), containsString("maximum of " + Util.DELETION_MAX), containsString("garbage-collecting")));
-        } finally {
-            Util.DELETION_MAX = defaultDeletionMax;
-            Util.WAIT_BETWEEN_DELETION_RETRIES = defaultDeletionWait;
-            Util.GC_AFTER_FAILED_DELETE = defaultDeletionGC;
-            unlockFilesForDeletion();
-        }
-    }
-
-    /** Creates multiple directories. */
-    private static void mkdirs(File... dirs) {
-        for( File d : dirs ) {
-            d.mkdir();
-            assertTrue(d.getPath(), d.isDirectory());
-        }
-    }
-
-    /** Creates multiple files, each containing their filename as text content. */
-    private static void mkfiles(File... files) throws IOException {
-        for( File f : files )
-            FileUtils.write(f, f.getName());
-    }
-
-    /** Means of unlocking all the files we have locked, indexed by {@link File}. */
-    private final Map<File, Callable<Void>> unlockFileCallables = new HashMap<File, Callable<Void>>();
-
-    /** Prevents a file from being deleted, so we can stress the deletion code's retries. */
-    private void lockFileForDeletion(File f) throws IOException, InterruptedException {
-        assert !unlockFileCallables.containsKey(f) : f + " is already locked." ;
-        // Limitation: Only works on Windows. On unix we can delete anything we can create.
-        // On unix, can't use "chmod a-w" on the dir as the code-under-test undoes that.
-        // On unix, can't use "chattr +i" because that needs root.
-        // On unix, can't use "chattr +u" because ext fs ignores it.
-        // On Windows, can't use FileChannel.lock() because that doesn't block deletion
-        // On Windows, we can't delete files that are open for reading, so we use that.
-        // NOTE: This is a hack in any case as there is no guarantee that all Windows filesystems
-        // will enforce blocking deletion on open files... just that the ones we normally
-        // test with seem to block.
-        assert Functions.isWindows();
-        final InputStream s = new FileInputStream(f); // intentional use of FileInputStream
-        unlockFileCallables.put(f, new Callable<Void>() {
-            public Void call() throws IOException { s.close(); return null; };
-        });
-    }
-
-    /** Undoes a call to {@link #lockFileForDeletion(File)}. */
-    private void unlockFileForDeletion(File f) throws Exception {
-        unlockFileCallables.remove(f).call();
-    }
-
-    /** Undoes all calls to {@link #lockFileForDeletion(File)}. */
-    private void unlockFilesForDeletion() throws Exception {
-        while( !unlockFileCallables.isEmpty() ) {
-            unlockFileForDeletion(unlockFileCallables.keySet().iterator().next());
-        }
-    }
-
-    /** Returns all classes in the exception hierarchy. */
-    private static Iterable<Class<?>> calcExceptionHierarchy(Throwable t) {
-        final List<Class<?>> result = Lists.newArrayList();
-        for( ; t!=null ; t = t.getCause())
-            result.add(t.getClass());
-        return result;
+    @Issue("JENKINS-55448")
+    public void testIsSymlink_ParentIsSymlink() throws IOException, InterruptedException {
+        assumeFalse(Functions.isWindows());
+        File folder = tmp.newFolder();
+        File file = new File(folder, "test-file");
+        new FilePath(file).touch(System.currentTimeMillis());
+        Path link = tmp.getRoot().toPath().resolve("sym-link");
+        Path pathWithSymlinkParent = Files.createSymbolicLink(link, folder.toPath()).resolve("test-file");
+        assertTrue(Util.isSymlink(link));
+        assertFalse(Util.isSymlink(pathWithSymlinkParent));
     }
 
     @Test
@@ -571,52 +357,54 @@ public class UtilTest {
     @Issue("JENKINS-10346")
     @Test
     public void testDigestThreadSafety() throws InterruptedException {
-    	String a = "abcdefgh";
-    	String b = "123456789";
+        String a = "abcdefgh";
+        String b = "123456789";
 
-    	String digestA = Util.getDigestOf(a);
-    	String digestB = Util.getDigestOf(b);
+        String digestA = Util.getDigestOf(a);
+        String digestB = Util.getDigestOf(b);
 
-    	DigesterThread t1 = new DigesterThread(a, digestA);
-    	DigesterThread t2 = new DigesterThread(b, digestB);
+        DigesterThread t1 = new DigesterThread(a, digestA);
+        DigesterThread t2 = new DigesterThread(b, digestB);
 
-    	t1.start();
-    	t2.start();
+        t1.start();
+        t2.start();
 
-    	t1.join();
-    	t2.join();
+        t1.join();
+        t2.join();
 
-    	if (t1.error != null) {
-    		fail(t1.error);
-    	}
-    	if (t2.error != null) {
-    		fail(t2.error);
-    	}
+        if (t1.error != null) {
+            fail(t1.error);
+        }
+        if (t2.error != null) {
+            fail(t2.error);
+        }
     }
 
     private static class DigesterThread extends Thread {
-    	private String string;
-		private String expectedDigest;
+        private String string;
+        private String expectedDigest;
 
-		private String error;
+        private String error;
 
-		public DigesterThread(String string, String expectedDigest) {
-    		this.string = string;
-    		this.expectedDigest = expectedDigest;
-    	}
+        DigesterThread(String string, String expectedDigest) {
+            this.string = string;
+            this.expectedDigest = expectedDigest;
+        }
 
-		public void run() {
-			for (int i=0; i < 1000; i++) {
-				String digest = Util.getDigestOf(this.string);
-				if (!this.expectedDigest.equals(digest)) {
-					this.error = "Expected " + this.expectedDigest + ", but got " + digest;
-					break;
-				}
-			}
-		}
+        @Override
+        public void run() {
+            for (int i = 0; i < 1000; i++) {
+                String digest = Util.getDigestOf(this.string);
+                if (!this.expectedDigest.equals(digest)) {
+                    this.error = "Expected " + this.expectedDigest + ", but got " + digest;
+                    break;
+                }
+            }
+        }
     }
 
     @Test
+    @SuppressWarnings("deprecation")
     public void testIsAbsoluteUri() {
         assertTrue(Util.isAbsoluteUri("http://foobar/"));
         assertTrue(Util.isAbsoluteUri("mailto:kk@kohsuke.org"));
@@ -645,6 +433,39 @@ public class UtilTest {
         assertTrue(Util.isSafeToRedirectTo("../.."));
         assertTrue(Util.isSafeToRedirectTo("/#foo"));
         assertTrue(Util.isSafeToRedirectTo("/?foo"));
+    }
+
+    @Test
+    public void loadFile() throws IOException {
+        // Standard character sets
+        assertEquals(
+                "Iñtërnâtiônàlizætiøn",
+                Util.loadFile(FileUtils.toFile(getClass().getResource("internationalization-utf-8.txt")), StandardCharsets.UTF_8));
+        assertEquals(
+                "Iñtërnâtiônàlizætiøn",
+                Util.loadFile(FileUtils.toFile(getClass().getResource("internationalization-iso-8859-1.txt")), StandardCharsets.ISO_8859_1));
+        assertEquals(
+                "Iñtërnâtiônàlizætiøn",
+                Util.loadFile(FileUtils.toFile(getClass().getResource("internationalization-windows-1252.txt")), Charset.forName("windows-1252")));
+
+        // Malformed input is replaced without throwing an exception
+        assertEquals(
+                "Itrntinliztin",
+                Util.loadFile(FileUtils.toFile(getClass().getResource("internationalization-utf-8.txt")), StandardCharsets.US_ASCII).replaceAll("�", ""));
+        assertEquals(
+                "Itrntinliztin",
+                Util.loadFile(FileUtils.toFile(getClass().getResource("internationalization-iso-8859-1.txt")), StandardCharsets.US_ASCII).replaceAll("�", ""));
+        assertEquals(
+                "Itrntinliztin",
+                Util.loadFile(FileUtils.toFile(getClass().getResource("internationalization-windows-1252.txt")), StandardCharsets.US_ASCII).replaceAll("�", ""));
+
+        // Unmappable character is replaced without throwing an exception
+        assertEquals(
+                "foobar",
+                Util.loadFile(FileUtils.toFile(getClass().getResource("foo-0x81-bar.txt")), Charset.forName("windows-1252")).replaceAll("�", ""));
+
+        // Nonexistent file is returned as an empty string without throwing an exception
+        assertEquals("", Util.loadFile(new File("i-do-not-exist"), StandardCharsets.UTF_8));
     }
 
     @Test
@@ -720,13 +541,13 @@ public class UtilTest {
             other = new File("/usr");
 
         }
-        assertTrue(Util.isDescendant(root, new File(root,"child")));
-        assertTrue(Util.isDescendant(root, new File(new File(root,"child"), "grandchild")));
+        assertTrue(Util.isDescendant(root, new File(root, "child")));
+        assertTrue(Util.isDescendant(root, new File(new File(root, "child"), "grandchild")));
         assertFalse(Util.isDescendant(root, other));
         assertFalse(Util.isDescendant(root, new File(other, "child")));
 
-        assertFalse(Util.isDescendant(new File(root,"child"), root));
-        assertFalse(Util.isDescendant(new File(new File(root,"child"), "grandchild"), root));
+        assertFalse(Util.isDescendant(new File(root, "child"), root));
+        assertFalse(Util.isDescendant(new File(new File(root, "child"), "grandchild"), root));
 
         //.. whithin root
         File convoluted = new File(root, "child");
@@ -761,16 +582,12 @@ public class UtilTest {
 
         assertEquals("Non-permission bits should be ignored", PosixFilePermissions.fromString("r-xr-----"), Util.modeToPermissions(0100540));
 
-        try {
-            Util.modeToPermissions(01777);
-            fail("Did not detect invalid mode");
-        } catch (IOException e) {
-            assertThat(e.getMessage(), startsWith("Invalid mode"));
-        }
+        Exception e = Assert.assertThrows(Exception.class, () -> Util.modeToPermissions(01777));
+        assertThat(e.getMessage(), startsWith("Invalid mode"));
     }
 
     @Test
-    public void testPermissionsToMode() throws Exception {
+    public void testPermissionsToMode() {
         assertEquals(0777, Util.permissionsToMode(PosixFilePermissions.fromString("rwxrwxrwx")));
         assertEquals(0757, Util.permissionsToMode(PosixFilePermissions.fromString("rwxr-xrwx")));
         assertEquals(0750, Util.permissionsToMode(PosixFilePermissions.fromString("rwxr-x---")));
@@ -785,31 +602,163 @@ public class UtilTest {
 
     @Test
     public void testDifferenceDays() throws Exception {
-        Date may_6_10am = parseDate("2018-05-06 10:00:00"); 
-        Date may_6_11pm55 = parseDate("2018-05-06 23:55:00"); 
-        Date may_7_01am = parseDate("2018-05-07 01:00:00"); 
-        Date may_7_11pm = parseDate("2018-05-07 11:00:00"); 
-        Date may_8_08am = parseDate("2018-05-08 08:00:00"); 
-        Date june_3_08am = parseDate("2018-06-03 08:00:00"); 
-        Date june_9_08am = parseDate("2018-06-09 08:00:00"); 
-        Date june_9_08am_nextYear = parseDate("2019-06-09 08:00:00"); 
-        
+        Date may_6_10am = parseDate("2018-05-06 10:00:00");
+        Date may_6_11pm55 = parseDate("2018-05-06 23:55:00");
+        Date may_7_01am = parseDate("2018-05-07 01:00:00");
+        Date may_7_11pm = parseDate("2018-05-07 11:00:00");
+        Date may_8_08am = parseDate("2018-05-08 08:00:00");
+        Date june_3_08am = parseDate("2018-06-03 08:00:00");
+        Date june_9_08am = parseDate("2018-06-09 08:00:00");
+        Date june_9_08am_nextYear = parseDate("2019-06-09 08:00:00");
+
         assertEquals(0, Util.daysBetween(may_6_10am, may_6_11pm55));
         assertEquals(1, Util.daysBetween(may_6_10am, may_7_01am));
         assertEquals(1, Util.daysBetween(may_6_11pm55, may_7_01am));
         assertEquals(2, Util.daysBetween(may_6_10am, may_8_08am));
         assertEquals(1, Util.daysBetween(may_7_11pm, may_8_08am));
-        
+
         // larger scale
         assertEquals(28, Util.daysBetween(may_6_10am, june_3_08am));
         assertEquals(34, Util.daysBetween(may_6_10am, june_9_08am));
         assertEquals(365 + 34, Util.daysBetween(may_6_10am, june_9_08am_nextYear));
-        
+
         // reverse order
         assertEquals(-1, Util.daysBetween(may_8_08am, may_7_11pm));
     }
-    
+
     private Date parseDate(String dateString) throws ParseException {
         return new SimpleDateFormat("yyyy-MM-dd hh:mm:ss").parse(dateString);
+    }
+
+    @Test
+    @Issue("SECURITY-904")
+    public void resolveSymlinkToFile() throws Exception {
+        assumeFalse(Functions.isWindows());
+        //  root
+        //      /a
+        //          /aa
+        //              aa.txt
+        //          /_b => symlink to /root/b
+        //      /b
+        //          /_a => symlink to /root/a
+        File root = tmp.getRoot();
+        File a = new File(root, "a");
+        File aa = new File(a, "aa");
+        aa.mkdirs();
+        File aaTxt = new File(aa, "aa.txt");
+        Files.writeString(aaTxt.toPath(), "aa", StandardCharsets.US_ASCII);
+
+        File b = new File(root, "b");
+        b.mkdir();
+
+        File _a = new File(b, "_a");
+        Util.createSymlink(_a.getParentFile(), a.getAbsolutePath(), _a.getName(), TaskListener.NULL);
+
+        File _b = new File(a, "_b");
+        Util.createSymlink(_b.getParentFile(), b.getAbsolutePath(), _b.getName(), TaskListener.NULL);
+
+        assertTrue(Files.isSymbolicLink(_a.toPath()));
+        assertTrue(Files.isSymbolicLink(_b.toPath()));
+
+        // direct symlinks are resolved
+        assertEquals(Util.resolveSymlinkToFile(_a), a);
+        assertEquals(Util.resolveSymlinkToFile(_b), b);
+
+        // intermediate symlinks are NOT resolved
+        assertNull(Util.resolveSymlinkToFile(new File(_a, "aa")));
+        assertNull(Util.resolveSymlinkToFile(new File(_a, "aa/aa.txt")));
+    }
+
+    @Test
+    @Issue("JENKINS-67372")
+    public void createDirectories() throws Exception {
+        assumeFalse(Functions.isWindows());
+        //  root
+        //      /a
+        //          /a1
+        //          /a2 => symlink to a1
+        //      /b => symlink to a
+        Path root = tmp.getRoot().toPath().toRealPath();
+        Path a = root.resolve("a");
+        Path a1 = a.resolve("a1");
+        Files.createDirectories(a1);
+
+        Path a2 = a.resolve("a2");
+        Util.createSymlink(a2.getParent().toFile(), a1.getFileName().toString(), a2.getFileName().toString(), TaskListener.NULL);
+
+        Path b = root.resolve("b");
+        Util.createSymlink(b.getParent().toFile(), a.getFileName().toString(), b.getFileName().toString(), TaskListener.NULL);
+
+        assertTrue(Files.isSymbolicLink(a2));
+        assertTrue(Files.isSymbolicLink(b));
+
+        assertEquals(a.resolve("new1"), Util.createDirectories(a.resolve("new1")).toRealPath());
+        assertEquals(a1.resolve("new2"), Util.createDirectories(a1.resolve("new2")).toRealPath());
+        assertEquals(a1.resolve("new3"), Util.createDirectories(a2.resolve("new3")).toRealPath());
+        assertEquals(a.resolve("new4"), Util.createDirectories(b.resolve("new4")).toRealPath());
+        assertEquals(a1.resolve("new5"), Util.createDirectories(b.resolve("a1").resolve("new5")).toRealPath());
+        assertEquals(a1.resolve("new6"), Util.createDirectories(b.resolve("a2").resolve("new6")).toRealPath());
+    }
+
+    @Test
+    @Issue("JENKINS-67372")
+    public void createDirectoriesInRoot() throws Exception {
+        assumeFalse(Functions.isWindows());
+        Path newDirInRoot = Paths.get("/new-dir-in-root");
+        Path newSymlinkInRoot = Paths.get("/new-symlink-in-root");
+        try {
+            assertEquals(newDirInRoot.resolve("new1"), Util.createDirectories(newDirInRoot.resolve("new1")).toRealPath());
+            Util.createSymlink(newSymlinkInRoot.getParent().toFile(), newDirInRoot.getFileName().toString(), newSymlinkInRoot.getFileName().toString(), TaskListener.NULL);
+            assertEquals(newDirInRoot.resolve("new2"), Util.createDirectories(newSymlinkInRoot.resolve("new2")).toRealPath());
+        } catch (FileSystemException e) {
+            // Not running as root
+            assumeNoException(e);
+        }
+    }
+
+    @Test
+    public void ifOverriddenSuccess() {
+        assertTrue(Util.ifOverridden(() -> true, BaseClass.class, DerivedClassSuccess.class, "method"));
+    }
+
+    @Test
+    public void ifOverriddenFailure() {
+        AbstractMethodError error = Assert.assertThrows(AbstractMethodError.class, () -> Util.ifOverridden(() -> true, BaseClass.class, DerivedClassFailure.class, "method"));
+        assertEquals("The class " + DerivedClassFailure.class.getName() + " must override at least one of the BaseClass.method methods", error.getMessage());
+    }
+
+    @Test
+    public void testGetHexOfSHA256DigestOf() throws IOException {
+        byte[] input = new byte[] {12, 34, 16};
+        String str = Util.getHexOfSHA256DigestOf(input);
+        assertEquals(str, "134fefbd329986726407a5208107ef07c9e33da779f5068bff191733268fe997");
+    }
+
+    @Test
+    public void testGetSHA256DigestOf() {
+        byte[] input = new byte[] {12, 34, 16};
+        byte[] sha256DigestActual = Util.getSHA256DigestOf(input);
+
+        byte[] expected = new byte[]
+                { 19, 79, -17, -67, 50, -103, -122, 114, 100, 7, -91, 32, -127, 7, -17, 7, -55, -29, 61, -89, 121, -11,
+                6, -117, -1, 25, 23, 51, 38, -113, -23, -105};
+        assertArrayEquals(expected, sha256DigestActual);
+    }
+
+    public static class BaseClass {
+        protected String method() {
+            return "base";
+        }
+    }
+
+    public static class DerivedClassFailure extends BaseClass {
+
+    }
+
+    public static class DerivedClassSuccess extends BaseClass {
+        @Override
+        protected String method() {
+            return DerivedClassSuccess.class.getName();
+        }
     }
 }

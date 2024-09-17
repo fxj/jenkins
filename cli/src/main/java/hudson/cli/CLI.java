@@ -21,299 +21,60 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
+
 package hudson.cli;
 
+import static java.util.logging.Level.FINE;
+import static java.util.logging.Level.parse;
+
+import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import hudson.cli.client.Messages;
-import hudson.remoting.Channel;
-import hudson.remoting.NamingThreadFactory;
-import hudson.remoting.PingThread;
-import hudson.remoting.Pipe;
-import hudson.remoting.RemoteInputStream;
-import hudson.remoting.RemoteOutputStream;
-import hudson.remoting.SocketChannelStream;
-import hudson.remoting.SocketOutputStream;
-import javax.crypto.SecretKey;
-import javax.crypto.spec.SecretKeySpec;
-import javax.net.ssl.HostnameVerifier;
-import javax.net.ssl.HttpsURLConnection;
-import javax.net.ssl.SSLContext;
-import javax.net.ssl.SSLSession;
-import javax.net.ssl.TrustManager;
-import java.io.BufferedInputStream;
-import java.io.BufferedOutputStream;
-import java.io.BufferedReader;
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
-import java.io.Closeable;
+import jakarta.websocket.ClientEndpointConfig;
+import jakarta.websocket.Endpoint;
+import jakarta.websocket.EndpointConfig;
+import jakarta.websocket.HandshakeResponse;
+import jakarta.websocket.Session;
 import java.io.DataInputStream;
-import java.io.DataOutputStream;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.io.PrintStream;
-import java.io.StringReader;
-import java.net.HttpURLConnection;
-import java.net.InetSocketAddress;
-import java.net.Socket;
+import java.net.URI;
 import java.net.URL;
 import java.net.URLConnection;
+import java.nio.ByteBuffer;
 import java.nio.charset.Charset;
+import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.security.GeneralSecurityException;
 import java.security.KeyPair;
-import java.security.PublicKey;
 import java.security.SecureRandom;
-import java.security.Signature;
-import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Properties;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.logging.Handler;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-import static java.util.logging.Level.*;
-import org.apache.commons.io.FileUtils;
+import javax.net.ssl.HttpsURLConnection;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.TrustManager;
+import org.glassfish.tyrus.client.ClientManager;
+import org.glassfish.tyrus.client.ClientProperties;
+import org.glassfish.tyrus.client.SslEngineConfigurator;
+import org.glassfish.tyrus.client.exception.DeploymentHandshakeException;
+import org.glassfish.tyrus.container.jdk.client.JdkClientContainer;
 
 /**
  * CLI entry point to Jenkins.
- * 
- * @author Kohsuke Kawaguchi
  */
-public class CLI implements AutoCloseable {
-    private final ExecutorService pool;
-    private final Channel channel;
-    private final CliEntryPoint entryPoint;
-    private final boolean ownsPool;
-    private final List<Closeable> closables = new ArrayList<Closeable>(); // stuff to close in the close method
-    private final String httpsProxyTunnel;
-    private final String authorization;
+@SuppressFBWarnings(value = "CRLF_INJECTION_LOGS", justification = "We don't care about this behavior")
+public class CLI {
 
-    /**
-     * For tests only.
-     * @deprecated Specific to {@link Mode#REMOTING}.
-     */
-    @Deprecated
-    public CLI(URL jenkins) throws IOException, InterruptedException {
-        this(jenkins,null);
-    }
-
-    /**
-     * @deprecated
-     *      Use {@link CLIConnectionFactory} to create {@link CLI}
-     */
-    @Deprecated
-    public CLI(URL jenkins, ExecutorService exec) throws IOException, InterruptedException {
-        this(jenkins,exec,null);
-    }
-
-    /**
-     * @deprecated 
-     *      Use {@link CLIConnectionFactory} to create {@link CLI}
-     */
-    @Deprecated
-    public CLI(URL jenkins, ExecutorService exec, String httpsProxyTunnel) throws IOException, InterruptedException {
-        this(new CLIConnectionFactory().url(jenkins).executorService(exec).httpsProxyTunnel(httpsProxyTunnel));
-    }
-
-    /**
-     * @deprecated Specific to {@link Mode#REMOTING}.
-     */
-    @Deprecated
-    /*package*/ CLI(CLIConnectionFactory factory) throws IOException, InterruptedException {
-        URL jenkins = factory.jenkins;
-        this.httpsProxyTunnel = factory.httpsProxyTunnel;
-        this.authorization = factory.authorization;
-        ExecutorService exec = factory.exec;
-        
-        ownsPool = exec==null;
-        pool = exec!=null ? exec : Executors.newCachedThreadPool(new NamingThreadFactory(Executors.defaultThreadFactory(), "CLI.pool"));
-
-        Channel _channel;
-        try {
-            _channel = connectViaCliPort(jenkins, getCliTcpPort(jenkins));
-        } catch (IOException e) {
-            LOGGER.log(Level.FINE, "Failed to connect via CLI port. Falling back to HTTP", e);
-            try {
-                _channel = connectViaHttp(jenkins);
-            } catch (IOException e2) {
-                e.addSuppressed(e2);
-                throw e;
-            }
-        }
-        this.channel = _channel;
-
-        // execute the command
-        entryPoint = (CliEntryPoint)_channel.waitForRemoteProperty(CliEntryPoint.class.getName());
-
-        if(entryPoint.protocolVersion()!=CliEntryPoint.VERSION)
-            throw new IOException(Messages.CLI_VersionMismatch());
-    }
-
-    /**
-     * @deprecated Specific to {@link Mode#REMOTING}.
-     */
-    @Deprecated
-    private Channel connectViaHttp(URL url) throws IOException {
-        LOGGER.log(FINE, "Trying to connect to {0} via Remoting over HTTP", url);
-
-        FullDuplexHttpStream con = new FullDuplexHttpStream(url, "cli?remoting=true", authorization);
-        Channel ch = new Channel("Chunked connection to " + url,
-                pool,con.getInputStream(),con.getOutputStream());
-        final long interval = 15*1000;
-        final long timeout = (interval * 3) / 4;
-        new PingThread(ch,timeout,interval) {
-            protected void onDead() {
-                // noop. the point of ping is to keep the connection alive
-                // as most HTTP servers have a rather short read time out
-            }
-        }.start();
-        return ch;
-    }
-
-    /**
-     * @deprecated Specific to {@link Mode#REMOTING}.
-     */
-    @Deprecated
-    private Channel connectViaCliPort(URL jenkins, CliPort clip) throws IOException {
-        LOGGER.log(FINE, "Trying to connect directly via Remoting over TCP/IP to {0}", clip.endpoint);
-
-        if (authorization != null) {
-            LOGGER.warning("-auth ignored when using JNLP agent port");
-        }
-
-        final Socket s = new Socket();
-        // this prevents a connection from silently terminated by the router in between or the other peer
-        // and that goes without unnoticed. However, the time out is often very long (for example 2 hours
-        // by default in Linux) that this alone is enough to prevent that.
-        s.setKeepAlive(true);
-        // we take care of buffering on our own
-        s.setTcpNoDelay(true);
-        OutputStream out;
-
-        if (httpsProxyTunnel!=null) {
-            String[] tokens = httpsProxyTunnel.split(":");
-            LOGGER.log(Level.FINE, "Using HTTP proxy {0}:{1} to connect to CLI port", new Object[]{tokens[0], tokens[1]});
-            s.connect(new InetSocketAddress(tokens[0], Integer.parseInt(tokens[1])));
-            PrintStream o = new PrintStream(s.getOutputStream());
-            o.print("CONNECT " + clip.endpoint.getHostString() + ":" + clip.endpoint.getPort() + " HTTP/1.0\r\n\r\n");
-
-            // read the response from the proxy
-            ByteArrayOutputStream rsp = new ByteArrayOutputStream();
-            while (!rsp.toString("ISO-8859-1").endsWith("\r\n\r\n")) {
-                int ch = s.getInputStream().read();
-                if (ch<0)   throw new IOException("Failed to read the HTTP proxy response: "+rsp);
-                rsp.write(ch);
-            }
-            String head = new BufferedReader(new StringReader(rsp.toString("ISO-8859-1"))).readLine();
-
-            if (head == null) {
-                throw new IOException("Unexpected empty response");
-            }
-            if (!(head.startsWith("HTTP/1.0 200 ") || head.startsWith("HTTP/1.1 200 "))) {
-                s.close();
-                LOGGER.log(Level.SEVERE, "Failed to tunnel the CLI port through the HTTP proxy. Falling back to HTTP.");
-                throw new IOException("Failed to establish a connection through HTTP proxy: " + rsp);
-            }
-
-            // HTTP proxies (at least the one I tried --- squid) doesn't seem to do half-close very well.
-            // So instead of relying on it, we'll just send the close command and then let the server
-            // cut their side, then close the socket after the join.
-            out = new SocketOutputStream(s) {
-                @Override
-                public void close() throws IOException {
-                    // ignore
-                }
-            };
-        } else {
-            s.connect(clip.endpoint,3000);
-            out = SocketChannelStream.out(s);
-        }
-
-        closables.add(new Closeable() {
-            public void close() throws IOException {
-                s.close();
-            }
-        });
-
-        Connection c = new Connection(SocketChannelStream.in(s),out);
-
-        switch (clip.version) {
-        case 1:
-            DataOutputStream dos = new DataOutputStream(s.getOutputStream());
-            dos.writeUTF("Protocol:CLI-connect");
-            // we aren't checking greeting from the server here because I'm too lazy. It gets ignored by Channel constructor.
-            break;
-        case 2:
-            DataInputStream dis = new DataInputStream(s.getInputStream());
-            dos = new DataOutputStream(s.getOutputStream());
-            dos.writeUTF("Protocol:CLI2-connect");
-            String greeting = dis.readUTF();
-            if (!greeting.equals("Welcome"))
-                throw new IOException("Handshaking failed: "+greeting);
-            try {
-                byte[] secret = c.diffieHellman(false).generateSecret();
-                SecretKey sessionKey = new SecretKeySpec(Connection.fold(secret,128/8),"AES");
-                c = c.encryptConnection(sessionKey,"AES/CFB8/NoPadding");
-
-                // validate the instance identity, so that we can be sure that we are talking to the same server
-                // and there's no one in the middle.
-                byte[] signature = c.readByteArray();
-
-                if (clip.identity!=null) {
-                    Signature verifier = Signature.getInstance("SHA1withRSA");
-                    verifier.initVerify(clip.getIdentity());
-                    verifier.update(secret);
-                    if (!verifier.verify(signature))
-                        throw new IOException("Server identity signature validation failed.");
-                }
-
-            } catch (GeneralSecurityException e) {
-                throw (IOException)new IOException("Failed to negotiate transport security").initCause(e);
-            }
-        }
-
-        return new Channel("CLI connection to "+jenkins, pool,
-                new BufferedInputStream(c.in), new BufferedOutputStream(c.out));
-    }
-
-    /**
-     * If the server advertises CLI endpoint, returns its location.
-     * @deprecated Specific to {@link Mode#REMOTING}.
-     */
-    @Deprecated
-    protected CliPort getCliTcpPort(URL url) throws IOException {
-        if (url.getHost()==null || url.getHost().length()==0) {
-            throw new IOException("Invalid URL: "+url);
-        }
-        URLConnection head = url.openConnection();
-        try {
-            head.connect();
-        } catch (IOException e) {
-            throw (IOException)new IOException("Failed to connect to "+url).initCause(e);
-        }
-
-        String h = head.getHeaderField("X-Jenkins-CLI-Host");
-        if (h==null)    h = head.getURL().getHost();
-        String p1 = head.getHeaderField("X-Jenkins-CLI-Port");
-        if (p1==null)    p1 = head.getHeaderField("X-Hudson-CLI-Port");   // backward compatibility
-        String p2 = head.getHeaderField("X-Jenkins-CLI2-Port");
-
-        String identity = head.getHeaderField("X-Instance-Identity");
-
-        flushURLConnection(head);
-        if (p1==null && p2==null) {
-            verifyJenkinsConnection(head);
-
-            throw new IOException("No X-Jenkins-CLI2-Port among " + head.getHeaderFields().keySet());
-        }
-
-        if (p2!=null)   return new CliPort(new InetSocketAddress(h,Integer.parseInt(p2)),identity,2);
-        else            return new CliPort(new InetSocketAddress(h,Integer.parseInt(p1)),identity,1);
-    }
+    private CLI() {}
 
     /**
      * Make sure the connection is open against Jenkins server.
@@ -323,102 +84,18 @@ public class CLI implements AutoCloseable {
      * @throws NotTalkingToJenkinsException when connection is not made to Jenkins service.
      */
     /*package*/ static void verifyJenkinsConnection(URLConnection c) throws IOException {
-        if (c.getHeaderField("X-Hudson")==null && c.getHeaderField("X-Jenkins")==null)
+        if (c.getHeaderField("X-Hudson") == null && c.getHeaderField("X-Jenkins") == null)
             throw new NotTalkingToJenkinsException(c);
     }
+
     /*package*/ static final class NotTalkingToJenkinsException extends IOException {
-        public NotTalkingToJenkinsException(String s) {
+        NotTalkingToJenkinsException(String s) {
             super(s);
         }
 
-        public NotTalkingToJenkinsException(URLConnection c) {
+        NotTalkingToJenkinsException(URLConnection c) {
             super("There's no Jenkins running at " + c.getURL().toString());
         }
-    }
-
-    /**
-     * Flush the supplied {@link URLConnection} input and close the
-     * connection nicely.
-     * @param conn the connection to flush/close
-     */
-    private void flushURLConnection(URLConnection conn) {
-        byte[] buf = new byte[1024];
-        try {
-            InputStream is = conn.getInputStream();
-            while (is.read(buf) >= 0) {
-                // Ignore
-            }
-            is.close();
-        } catch (IOException e) {
-            try {
-                InputStream es = ((HttpURLConnection)conn).getErrorStream();
-                if (es!=null) {
-                    while (es.read(buf) >= 0) {
-                        // Ignore
-                    }
-                    es.close();
-                }
-            } catch (IOException ex) {
-                // Ignore
-            }
-        }
-    }
-
-    /**
-     * Shuts down the channel and closes the underlying connection.
-     */
-    public void close() throws IOException, InterruptedException {
-        channel.close();
-        channel.join();
-        if(ownsPool)
-            pool.shutdown();
-        for (Closeable c : closables)
-            c.close();
-    }
-
-    public int execute(List<String> args, InputStream stdin, OutputStream stdout, OutputStream stderr) {
-        return entryPoint.main(args, Locale.getDefault(),
-                new RemoteInputStream(stdin),
-                new RemoteOutputStream(stdout),
-                new RemoteOutputStream(stderr));
-    }
-
-    public int execute(List<String> args) {
-        return execute(args, System.in, System.out, System.err);
-    }
-
-    public int execute(String... args) {
-        return execute(Arrays.asList(args));
-    }
-
-    /**
-     * Returns true if the named command exists.
-     */
-    public boolean hasCommand(String name) {
-        return entryPoint.hasCommand(name);
-    }
-
-    /**
-     * Accesses the underlying communication channel.
-     * @since 1.419
-     */
-    public Channel getChannel() {
-        return channel;
-    }
-
-    /**
-     * Attempts to lift the security restriction on the underlying channel.
-     * This requires the administer privilege on the server.
-     *
-     * @throws SecurityException
-     *      If we fail to upgrade the connection.
-     */
-    public void upgrade() {
-        ByteArrayOutputStream out = new ByteArrayOutputStream();
-        if (execute(Arrays.asList("groovy", "="),
-                new ByteArrayInputStream("hudson.remoting.Channel.current().setRestricted(false)".getBytes()),
-                out,out)!=0)
-            throw new SecurityException(out.toString()); // failed to upgrade
     }
 
     public static void main(final String[] _args) throws Exception {
@@ -434,30 +111,35 @@ public class CLI implements AutoCloseable {
         }
     }
 
-    private enum Mode {HTTP, SSH, REMOTING}
+    private enum Mode { HTTP, SSH, WEB_SOCKET }
+
     public static int _main(String[] _args) throws Exception {
         List<String> args = Arrays.asList(_args);
         PrivateKeyProvider provider = new PrivateKeyProvider();
-        boolean sshAuthRequestedExplicitly = false;
-        String httpProxy=null;
 
         String url = System.getenv("JENKINS_URL");
 
-        if (url==null)
+        if (url == null)
             url = System.getenv("HUDSON_URL");
-        
-        boolean tryLoadPKey = true;
+
+        boolean noKeyAuth = false;
 
         Mode mode = null;
 
         String user = null;
         String auth = null;
-        boolean strictHostKey = false;
+        String bearer = null;
 
-        while(!args.isEmpty()) {
+        String userIdEnv = System.getenv("JENKINS_USER_ID");
+        String tokenEnv = System.getenv("JENKINS_API_TOKEN");
+
+        boolean strictHostKey = false;
+        boolean noCertificateCheck = false;
+
+        while (!args.isEmpty()) {
             String head = args.get(0);
             if (head.equals("-version")) {
-                System.out.println("Version: "+computeVersion());
+                System.out.println("Version: " + computeVersion());
                 return 0;
             }
             if (head.equals("-http")) {
@@ -478,41 +160,37 @@ public class CLI implements AutoCloseable {
                 args = args.subList(1, args.size());
                 continue;
             }
-            if (head.equals("-remoting")) {
+            if (head.equals("-webSocket")) {
                 if (mode != null) {
-                    printUsage("-remoting clashes with previously defined mode " + mode);
+                    printUsage("-webSocket clashes with previously defined mode " + mode);
                     return -1;
                 }
-                mode = Mode.REMOTING;
+                mode = Mode.WEB_SOCKET;
                 args = args.subList(1, args.size());
                 continue;
             }
-            if(head.equals("-s") && args.size()>=2) {
+            if (head.equals("-remoting")) {
+                printUsage("-remoting mode is no longer supported");
+                return -1;
+            }
+            if (head.equals("-s") && args.size() >= 2) {
                 url = args.get(1);
-                args = args.subList(2,args.size());
+                args = args.subList(2, args.size());
                 continue;
             }
             if (head.equals("-noCertificateCheck")) {
                 LOGGER.info("Skipping HTTPS certificate checks altogether. Note that this is not secure at all.");
-                SSLContext context = SSLContext.getInstance("TLS");
-                context.init(null, new TrustManager[]{new NoCheckTrustManager()}, new SecureRandom());
-                HttpsURLConnection.setDefaultSSLSocketFactory(context.getSocketFactory());
-                // bypass host name check, too.
-                HttpsURLConnection.setDefaultHostnameVerifier(new HostnameVerifier() {
-                    public boolean verify(String s, SSLSession sslSession) {
-                        return true;
-                    }
-                });
-                args = args.subList(1,args.size());
+                noCertificateCheck = true;
+                args = args.subList(1, args.size());
                 continue;
             }
             if (head.equals("-noKeyAuth")) {
-            	tryLoadPKey = false;
-            	args = args.subList(1,args.size());
-            	continue;
+                noKeyAuth = true;
+                args = args.subList(1, args.size());
+                continue;
             }
-            if(head.equals("-i") && args.size()>=2) {
-                File f = new File(args.get(1));
+            if (head.equals("-i") && args.size() >= 2) {
+                File f = getFileFromArguments(args);
                 if (!f.exists()) {
                     printUsage(Messages.CLI_NoSuchFileExists(f));
                     return -1;
@@ -520,8 +198,7 @@ public class CLI implements AutoCloseable {
 
                 provider.readFrom(f);
 
-                args = args.subList(2,args.size());
-                sshAuthRequestedExplicitly = true;
+                args = args.subList(2, args.size());
                 continue;
             }
             if (head.equals("-strictHostKey")) {
@@ -539,9 +216,9 @@ public class CLI implements AutoCloseable {
                 args = args.subList(2, args.size());
                 continue;
             }
-            if(head.equals("-p") && args.size()>=2) {
-                httpProxy = args.get(1);
-                args = args.subList(2,args.size());
+            if (head.equals("-bearer") && args.size() >= 2) {
+                bearer = args.get(1);
+                args = args.subList(2, args.size());
                 continue;
             }
             if (head.equals("-logger") && args.size() >= 2) {
@@ -558,23 +235,35 @@ public class CLI implements AutoCloseable {
             break;
         }
 
-        if(url==null) {
+        if (url == null) {
             printUsage(Messages.CLI_NoURL());
             return -1;
+        }
+
+        if (auth != null && bearer != null) {
+            LOGGER.warning("-auth and -bearer are mutually exclusive");
+        }
+
+        if (auth == null && bearer == null) {
+            // -auth option not set
+            if ((userIdEnv != null && !userIdEnv.isBlank()) && (tokenEnv != null && !tokenEnv.isBlank())) {
+                auth = userIdEnv.concat(":").concat(tokenEnv);
+            } else if ((userIdEnv != null && !userIdEnv.isBlank()) || (tokenEnv != null && !tokenEnv.isBlank())) {
+                printUsage(Messages.CLI_BadAuth());
+                return -1;
+            } // Otherwise, none credentials were set
+
         }
 
         if (!url.endsWith("/")) {
             url += '/';
         }
 
-        if(args.isEmpty())
-            args = Arrays.asList("help"); // default to help
-
-        if (tryLoadPKey && !provider.hasKeys())
-            provider.readFromDefaultLocations();
+        if (args.isEmpty())
+            args = List.of("help"); // default to help
 
         if (mode == null) {
-            mode = Mode.HTTP;
+            mode = Mode.WEB_SOCKET;
         }
 
         LOGGER.log(FINE, "using connection mode {0}", mode);
@@ -589,6 +278,9 @@ public class CLI implements AutoCloseable {
                 LOGGER.warning("-user required when using -ssh");
                 return -1;
             }
+            if (!noKeyAuth && !provider.hasKeys()) {
+                provider.readFromDefaultLocations();
+            }
             return SSHCLI.sshConnection(url, user, args, provider, strictHostKey);
         }
 
@@ -596,123 +288,148 @@ public class CLI implements AutoCloseable {
             LOGGER.warning("-strictHostKey meaningful only with -ssh");
         }
 
+        if (noKeyAuth) {
+            LOGGER.warning("-noKeyAuth meaningful only with -ssh");
+        }
+
         if (user != null) {
             LOGGER.warning("Warning: -user ignored unless using -ssh");
         }
 
-        CLIConnectionFactory factory = new CLIConnectionFactory().url(url).httpsProxyTunnel(httpProxy);
+        CLIConnectionFactory factory = new CLIConnectionFactory().noCertificateCheck(noCertificateCheck);
         String userInfo = new URL(url).getUserInfo();
         if (userInfo != null) {
             factory = factory.basicAuth(userInfo);
         } else if (auth != null) {
-            factory = factory.basicAuth(auth.startsWith("@") ? FileUtils.readFileToString(new File(auth.substring(1))).trim() : auth);
+            factory = factory.basicAuth(auth.startsWith("@") ? readAuthFromFile(auth).trim() : auth);
+        } else if (bearer != null) {
+            factory = factory.bearerAuth(bearer.startsWith("@") ? readAuthFromFile(bearer).trim() : bearer);
         }
+
 
         if (mode == Mode.HTTP) {
             return plainHttpConnection(url, args, factory);
         }
 
-        CLI cli = factory.connect();
+        if (mode == Mode.WEB_SOCKET) {
+            return webSocketConnection(url, args, factory);
+        }
+
+        throw new AssertionError();
+    }
+
+    @SuppressFBWarnings(value = {"PATH_TRAVERSAL_IN", "URLCONNECTION_SSRF_FD"}, justification = "User provided values for running the program.")
+    private static String readAuthFromFile(String auth) throws IOException {
+        Path path;
         try {
-            if (provider.hasKeys()) {
-                try {
-                    // TODO: server verification
-                    cli.authenticate(provider.getKeys());
-                } catch (IllegalStateException e) {
-                    if (sshAuthRequestedExplicitly) {
-                        LOGGER.warning("The server doesn't support public key authentication");
-                        return -1;
-                    }
-                } catch (UnsupportedOperationException e) {
-                    if (sshAuthRequestedExplicitly) {
-                        LOGGER.warning("The server doesn't support public key authentication");
-                        return -1;
-                    }
-                } catch (GeneralSecurityException e) {
-                    if (sshAuthRequestedExplicitly) {
-                        LOGGER.log(WARNING, null, e);
-                        return -1;
-                    }
-                    LOGGER.warning("Failed to authenticate with your SSH keys. Proceeding as anonymous");
-                    LOGGER.log(FINE, null, e);
+            path = Paths.get(auth.substring(1));
+        } catch (InvalidPathException e) {
+            throw new IOException(e);
+        }
+        return Files.readString(path, Charset.defaultCharset());
+    }
+
+    @SuppressFBWarnings(value = {"PATH_TRAVERSAL_IN", "URLCONNECTION_SSRF_FD"}, justification = "User provided values for running the program.")
+    private static File getFileFromArguments(List<String> args) {
+        return new File(args.get(1));
+    }
+
+    private static int webSocketConnection(String url, List<String> args, CLIConnectionFactory factory) throws Exception {
+        LOGGER.fine(() -> "Trying to connect to " + url + " via plain protocol over WebSocket");
+        class CLIEndpoint extends Endpoint {
+            @Override
+            public void onOpen(Session session, EndpointConfig config) {}
+        }
+
+        class Authenticator extends ClientEndpointConfig.Configurator {
+            HandshakeResponse hr;
+            @Override
+            public void beforeRequest(Map<String, List<String>> headers) {
+                if (factory.authorization != null) {
+                    headers.put("Authorization", List.of(factory.authorization));
                 }
             }
+            @Override
+            public void afterResponse(HandshakeResponse hr) {
+                this.hr = hr;
+            }
+        }
+        var authenticator = new Authenticator();
 
-            // execute the command
-            // Arrays.asList is not serializable --- see 6835580
-            args = new ArrayList<String>(args);
-            return cli.execute(args, System.in, System.out, System.err);
-        } finally {
-            cli.close();
+        ClientManager client = ClientManager.createClient(JdkClientContainer.class.getName()); // ~ ContainerProvider.getWebSocketContainer()
+        client.getProperties().put(ClientProperties.REDIRECT_ENABLED, true); // https://tyrus-project.github.io/documentation/1.13.1/index/tyrus-proprietary-config.html#d0e1775
+        if (factory.noCertificateCheck) {
+            SSLContext sslContext = SSLContext.getInstance("TLS");
+            sslContext.init(null, new TrustManager[] {new NoCheckTrustManager()}, new SecureRandom());
+            SslEngineConfigurator sslEngineConfigurator = new SslEngineConfigurator(sslContext);
+            sslEngineConfigurator.setHostnameVerifier((s, sslSession) -> true);
+            client.getProperties().put(ClientProperties.SSL_ENGINE_CONFIGURATOR, sslEngineConfigurator);
+        }
+        Session session;
+        try {
+            session = client.connectToServer(new CLIEndpoint(), ClientEndpointConfig.Builder.create().configurator(authenticator).build(), URI.create(url.replaceFirst("^http", "ws") + "cli/ws"));
+        } catch (DeploymentHandshakeException x) {
+            System.err.println("CLI handshake failed with status code " + x.getHttpStatusCode());
+            if (authenticator.hr != null) {
+                for (var entry : authenticator.hr.getHeaders().entrySet()) {
+                    // org.glassfish.tyrus.core.Utils.parseHeaderValue improperly splits values like Date at commas, so undo that:
+                    System.err.println(entry.getKey() + ": " + String.join(", ", entry.getValue()));
+                }
+                // UpgradeResponse.getReasonPhrase is useless since Jetty generates it from the code,
+                // and the body is not accessible at all.
+            }
+            return 15; // compare CLICommand.main
+        }
+        PlainCLIProtocol.Output out = new PlainCLIProtocol.Output() {
+            @Override
+            public void send(byte[] data) throws IOException {
+                session.getBasicRemote().sendBinary(ByteBuffer.wrap(data));
+            }
+
+            @Override
+            public void close() throws IOException {
+                session.close();
+            }
+        };
+        try (ClientSideImpl connection = new ClientSideImpl(out)) {
+            session.addMessageHandler(InputStream.class, is -> {
+                try {
+                    connection.handle(new DataInputStream(is));
+                } catch (IOException x) {
+                    LOGGER.log(Level.WARNING, null, x);
+                }
+            });
+            connection.start(args);
+            return connection.exit();
         }
     }
 
-    private static int plainHttpConnection(String url, List<String> args, CLIConnectionFactory factory) throws IOException, InterruptedException {
+    private static int plainHttpConnection(String url, List<String> args, CLIConnectionFactory factory)
+            throws GeneralSecurityException, IOException, InterruptedException {
         LOGGER.log(FINE, "Trying to connect to {0} via plain protocol over HTTP", url);
-        FullDuplexHttpStream streams = new FullDuplexHttpStream(new URL(url), "cli?remoting=false", factory.authorization);
-        class ClientSideImpl extends PlainCLIProtocol.ClientSide {
-            boolean complete;
-            int exit = -1;
-            ClientSideImpl(InputStream is, OutputStream os) throws IOException {
-                super(is, os);
-                if (is.read() != 0) { // cf. FullDuplexHttpService
-                    throw new IOException("expected to see initial zero byte; perhaps you are connecting to an old server which does not support -http?");
-                }
-            }
-            @Override
-            protected void onExit(int code) {
-                this.exit = code;
-                finished();
-            }
-            @Override
-            protected void onStdout(byte[] chunk) throws IOException {
-                System.out.write(chunk);
-            }
-            @Override
-            protected void onStderr(byte[] chunk) throws IOException {
-                System.err.write(chunk);
-            }
-            @Override
-            protected void handleClose() {
-                finished();
-            }
-            private synchronized void finished() {
-                complete = true;
-                notifyAll();
-            }
+        if (factory.noCertificateCheck) {
+            SSLContext sslContext = SSLContext.getInstance("TLS");
+            sslContext.init(null, new TrustManager[] {new NoCheckTrustManager()}, new SecureRandom());
+            HttpsURLConnection.setDefaultSSLSocketFactory(sslContext.getSocketFactory());
+            HttpsURLConnection.setDefaultHostnameVerifier((s, sslSession) -> true);
         }
-        try (final ClientSideImpl connection = new ClientSideImpl(streams.getInputStream(), streams.getOutputStream())) {
-            for (String arg : args) {
-                connection.sendArg(arg);
+        FullDuplexHttpStream streams = new FullDuplexHttpStream(new URL(url), "cli?remoting=false", factory.authorization);
+        try (ClientSideImpl connection = new ClientSideImpl(new PlainCLIProtocol.FramedOutput(streams.getOutputStream()))) {
+            connection.start(args);
+            InputStream is = streams.getInputStream();
+            if (is.read() != 0) { // cf. FullDuplexHttpService
+                throw new IOException("expected to see initial zero byte; perhaps you are connecting to an old server which does not support -http?");
             }
-            connection.sendEncoding(Charset.defaultCharset().name());
-            connection.sendLocale(Locale.getDefault().toString());
-            connection.sendStart();
-            connection.begin();
-            final OutputStream stdin = connection.streamStdin();
-            new Thread("input reader") {
-                @Override
-                public void run() {
-                    try {
-                        int c;
-                        while ((c = System.in.read()) != -1) { // TODO use InputStream.available
-                           stdin.write(c);
-                        }
-                        connection.sendEndStdin();
-                    } catch (IOException x) {
-                        LOGGER.log(Level.WARNING, null, x);
-                    }
-                }
-            }.start();
+            new PlainCLIProtocol.FramedReader(connection, is).start();
             new Thread("ping") { // JENKINS-46659
                 @Override
                 public void run() {
                     try {
-                        Thread.sleep(10_000);
+                        Thread.sleep(PING_INTERVAL);
                         while (!connection.complete) {
                             LOGGER.fine("sending ping");
                             connection.sendEncoding(Charset.defaultCharset().name()); // no-op at this point
-                            Thread.sleep(10_000);
+                            Thread.sleep(PING_INTERVAL);
                         }
                     } catch (IOException | InterruptedException x) {
                         LOGGER.log(Level.WARNING, null, x);
@@ -720,30 +437,93 @@ public class CLI implements AutoCloseable {
                 }
 
             }.start();
-            synchronized (connection) {
-                while (!connection.complete) {
-                    connection.wait();
-                }
-            }
-            return connection.exit;
+            return connection.exit();
         }
+    }
+
+    private static final class ClientSideImpl extends PlainCLIProtocol.ClientSide {
+
+        volatile boolean complete;
+        private int exit = -1;
+
+        ClientSideImpl(PlainCLIProtocol.Output out) {
+            super(out);
+        }
+
+        void start(List<String> args) throws IOException {
+            for (String arg : args) {
+                sendArg(arg);
+            }
+            sendEncoding(Charset.defaultCharset().name());
+            sendLocale(Locale.getDefault().toString());
+            sendStart();
+            new Thread("input reader") {
+                @Override
+                public void run() {
+                    try {
+                        final OutputStream stdin = streamStdin();
+                        byte[] buf = new byte[60_000]; // less than 64Kb frame size for WS
+                        while (!complete) {
+                            int len = System.in.read(buf);
+                            if (len == -1) {
+                                break;
+                            } else {
+                                stdin.write(buf, 0, len);
+                            }
+                        }
+                        sendEndStdin();
+                    } catch (IOException x) {
+                        LOGGER.log(Level.WARNING, null, x);
+                    }
+                }
+            }.start();
+        }
+
+        @Override
+        protected synchronized void onExit(int code) {
+            this.exit = code;
+            finished();
+        }
+
+        @Override
+        protected void onStdout(byte[] chunk) throws IOException {
+            System.out.write(chunk);
+        }
+
+        @Override
+        protected void onStderr(byte[] chunk) throws IOException {
+            System.err.write(chunk);
+        }
+
+        @Override
+        protected void handleClose() {
+            finished();
+        }
+
+        private synchronized void finished() {
+            complete = true;
+            notifyAll();
+        }
+
+        synchronized int exit() throws InterruptedException {
+            while (!complete) {
+                wait();
+            }
+            return exit;
+        }
+
     }
 
     private static String computeVersion() {
         Properties props = new Properties();
-        try {
-            InputStream is = CLI.class.getResourceAsStream("/jenkins/cli/jenkins-cli-version.properties");
-            if(is!=null) {
-                try {
-                    props.load(is);
-                } finally {
-                    is.close();
-                }
+        try (InputStream is = CLI.class.getResourceAsStream("/jenkins/cli/jenkins-cli-version.properties")) {
+            if (is != null) {
+                props.load(is);
             }
         } catch (IOException e) {
             e.printStackTrace(); // if the version properties is missing, that's OK.
         }
-        return props.getProperty("version","?");
+        return props.getProperty("version", "?");
     }
 
     /**
@@ -768,56 +548,17 @@ public class CLI implements AutoCloseable {
         return loadKey(pemString, null);
     }
 
-    /**
-     * Authenticate ourselves against the server.
-     *
-     * @return
-     *      identity of the server represented as a public key.
-     * @deprecated Specific to {@link Mode#REMOTING}.
-     */
-    @Deprecated
-    public PublicKey authenticate(Iterable<KeyPair> privateKeys) throws IOException, GeneralSecurityException {
-        Pipe c2s = Pipe.createLocalToRemote();
-        Pipe s2c = Pipe.createRemoteToLocal();
-        entryPoint.authenticate("ssh",c2s, s2c);
-        Connection c = new Connection(s2c.getIn(), c2s.getOut());
-
-        try {
-            byte[] sharedSecret = c.diffieHellman(false).generateSecret();
-            PublicKey serverIdentity = c.verifyIdentity(sharedSecret);
-
-            // try all the public keys
-            for (KeyPair key : privateKeys) {
-                c.proveIdentity(sharedSecret,key);
-                if (c.readBoolean())
-                    return serverIdentity;  // succeeded
-            }
-            if (privateKeys.iterator().hasNext())
-                throw new GeneralSecurityException("Authentication failed. No private key accepted.");
-            else
-                throw new GeneralSecurityException("No private key is available for use in authentication");
-        } finally {
-            c.close();
-        }
-    }
-
-    /**
-     * @deprecated Specific to {@link Mode#REMOTING}.
-     */
-    @Deprecated
-    public PublicKey authenticate(KeyPair key) throws IOException, GeneralSecurityException {
-        return authenticate(Collections.singleton(key));
-    }
-
     /** For access from {@code HelpCommand}. */
     static String usage() {
         return Messages.CLI_Usage();
     }
 
     private static void printUsage(String msg) {
-        if(msg!=null)   System.out.println(msg);
+        if (msg != null)   System.out.println(msg);
         System.err.println(usage());
     }
 
     static final Logger LOGGER = Logger.getLogger(CLI.class.getName());
+
+    private static final int PING_INTERVAL = Integer.getInteger(CLI.class.getName() + ".pingInterval", 3_000); // JENKINS-59267
 }

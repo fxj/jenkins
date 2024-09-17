@@ -1,18 +1,18 @@
 /*
  * The MIT License
- * 
+ *
  * Copyright (c) 2004-2009, Sun Microsystems, Inc., Kohsuke Kawaguchi, Jean-Baptiste Quenot, Tom Huybrechts
- * 
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
  * in the Software without restriction, including without limitation the rights
  * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
  * copies of the Software, and to permit persons to whom the Software is
  * furnished to do so, subject to the following conditions:
- * 
+ *
  * The above copyright notice and this permission notice shall be included in
  * all copies or substantial portions of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
  * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
@@ -21,31 +21,47 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
+
 package hudson;
 
-import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableSet;
+import static org.apache.commons.io.FilenameUtils.getBaseName;
 
-import java.io.FileNotFoundException;
-import java.io.InputStream;
-import java.nio.file.Files;
-import java.nio.file.InvalidPathException;
-
-import jenkins.util.AntWithFindResourceClassLoader;
-import jenkins.util.SystemProperties;
-import com.google.common.collect.Lists;
+import edu.umd.cs.findbugs.annotations.NonNull;
+import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import hudson.Plugin.DummyImpl;
 import hudson.PluginWrapper.Dependency;
 import hudson.model.Hudson;
-import jenkins.util.AntClassLoader;
 import hudson.util.CyclicGraphDetector;
 import hudson.util.CyclicGraphDetector.CycleDetectedException;
 import hudson.util.IOUtils;
 import hudson.util.MaskingClassLoader;
-import hudson.util.VersionNumber;
+import java.io.File;
+import java.io.FileNotFoundException;
+import java.io.FilenameFilter;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.lang.reflect.InvocationTargetException;
+import java.net.URL;
+import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.Enumeration;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+import java.util.UUID;
+import java.util.jar.Attributes;
+import java.util.jar.JarFile;
+import java.util.jar.Manifest;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 import jenkins.ClassLoaderReflectionToolkit;
 import jenkins.ExtensionFilter;
-import org.apache.commons.io.output.NullOutputStream;
+import jenkins.plugins.DetachedPluginsUtil;
+import jenkins.util.URLClassLoader2;
 import org.apache.tools.ant.BuildException;
 import org.apache.tools.ant.Project;
 import org.apache.tools.ant.taskdefs.Expand;
@@ -60,51 +76,16 @@ import org.apache.tools.zip.ZipEntry;
 import org.apache.tools.zip.ZipExtraField;
 import org.apache.tools.zip.ZipOutputStream;
 
-import java.io.Closeable;
-import java.io.File;
-import java.io.FilenameFilter;
-import java.io.IOException;
-import java.net.URL;
-import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.Enumeration;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
-import java.util.jar.Attributes;
-import java.util.jar.JarFile;
-import java.util.jar.Manifest;
-import java.util.logging.Level;
-import java.util.logging.Logger;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
-import org.jenkinsci.bytecode.Transformer;
-import org.kohsuke.accmod.Restricted;
-import org.kohsuke.accmod.restrictions.NoExternalUse;
-
-import javax.annotation.Nonnull;
-
-import static org.apache.commons.io.FilenameUtils.getBaseName;
-
 public class ClassicPluginStrategy implements PluginStrategy {
+
+    private static final Logger LOGGER = Logger.getLogger(ClassicPluginStrategy.class.getName());
 
     /**
      * Filter for jar files.
      */
-    private static final FilenameFilter JAR_FILTER = new FilenameFilter() {
-        public boolean accept(File dir,String name) {
-            return name.endsWith(".jar");
-        }
-    };
+    private static final FilenameFilter JAR_FILTER = (dir, name) -> name.endsWith(".jar");
 
-    private PluginManager pluginManager;
-
-    /**
-     * All the plugins eventually delegate this classloader to load core, servlet APIs, and SE runtime.
-     */
-    private final MaskingClassLoader coreClassLoader = new MaskingClassLoader(getClass().getClassLoader());
+    private final PluginManager pluginManager;
 
     public ClassicPluginStrategy(PluginManager pluginManager) {
         this.pluginManager = pluginManager;
@@ -136,7 +117,7 @@ public class ClassicPluginStrategy implements PluginStrategy {
     }
 
     private static Manifest loadLinkedManifest(File archive) throws IOException {
-            // resolve the .hpl file to the location of the manifest file        
+            // resolve the .hpl file to the location of the manifest file
             try {
                 // Locate the manifest
                 String firstLine;
@@ -145,13 +126,14 @@ public class ClassicPluginStrategy implements PluginStrategy {
                 } catch (InvalidPathException e) {
                     throw new IOException(e);
                 }
+                //noinspection StatementWithEmptyBody
                 if (firstLine.startsWith("Manifest-Version:")) {
                     // this is the manifest already
                 } else {
                     // indirection
                     archive = resolve(archive, firstLine);
                 }
-                
+
                 // Read the manifest
                 try (InputStream manifestInput = Files.newInputStream(archive.toPath())) {
                     return new Manifest(manifestInput);
@@ -166,7 +148,7 @@ public class ClassicPluginStrategy implements PluginStrategy {
     @Override public PluginWrapper createPluginWrapper(File archive) throws IOException {
         final Manifest manifest;
 
-        URL baseResourceURL = null;
+        URL baseResourceURL;
         File expandDir = null;
         // if .hpi, this is the directory where war is expanded
 
@@ -174,7 +156,7 @@ public class ClassicPluginStrategy implements PluginStrategy {
         if (isLinked) {
             manifest = loadLinkedManifest(archive);
         } else {
-            if (archive.isDirectory()) {// already expanded
+            if (archive.isDirectory()) { // already expanded
                 expandDir = archive;
             } else {
                 File f = pluginManager.getWorkDir();
@@ -193,6 +175,10 @@ public class ClassicPluginStrategy implements PluginStrategy {
             } catch (InvalidPathException e) {
                 throw new IOException(e);
             }
+            String canonicalName = manifest.getMainAttributes().getValue("Short-Name") + ".jpi";
+            if (!archive.getName().equals(canonicalName)) {
+                LOGGER.warning(() -> "encountered " + archive + " under a nonstandard name; expected " + canonicalName);
+            }
         }
 
         final Attributes atts = manifest.getMainAttributes();
@@ -200,12 +186,12 @@ public class ClassicPluginStrategy implements PluginStrategy {
         // TODO: define a mechanism to hide classes
         // String export = manifest.getMainAttributes().getValue("Export");
 
-        List<File> paths = new ArrayList<File>();
+        List<File> paths = new ArrayList<>();
         if (isLinked) {
             parseClassPath(manifest, archive, paths, "Libraries", ",");
             parseClassPath(manifest, archive, paths, "Class-Path", " +"); // backward compatibility
 
-            baseResourceURL = resolve(archive,atts.getValue("Resource-Path")).toURI().toURL();
+            baseResourceURL = resolve(archive, atts.getValue("Resource-Path")).toURI().toURL();
         } else {
             File classes = new File(expandDir, "WEB-INF/classes");
             if (classes.exists()) { // should not normally happen, due to createClassJarFromWebInfClasses
@@ -224,10 +210,13 @@ public class ClassicPluginStrategy implements PluginStrategy {
         if (disableFile.exists()) {
             LOGGER.info("Plugin " + archive.getName() + " is disabled");
         }
+        if (paths.isEmpty()) {
+            LOGGER.info("No classpaths found for plugin " + archive.getName());
+        }
 
         // compute dependencies
-        List<PluginWrapper.Dependency> dependencies = new ArrayList<PluginWrapper.Dependency>();
-        List<PluginWrapper.Dependency> optionalDependencies = new ArrayList<PluginWrapper.Dependency>();
+        List<PluginWrapper.Dependency> dependencies = new ArrayList<>();
+        List<PluginWrapper.Dependency> optionalDependencies = new ArrayList<>();
         String v = atts.getValue("Plugin-Dependencies");
         if (v != null) {
             for (String s : v.split(",")) {
@@ -239,217 +228,86 @@ public class ClassicPluginStrategy implements PluginStrategy {
                 }
             }
         }
-        
-        fix(atts,optionalDependencies);
 
-        // Register global classpath mask. This is useful for hiding JavaEE APIs that you might see from the container,
-        // such as database plugin for JPA support. The Mask-Classes attribute is insufficient because those classes
-        // also need to be masked by all the other plugins that depend on the database plugin.
-        String masked = atts.getValue("Global-Mask-Classes");
-        if(masked!=null) {
-            for (String pkg : masked.trim().split("[ \t\r\n]+"))
-                coreClassLoader.add(pkg);
-        }
+        fix(atts, optionalDependencies);
 
-        ClassLoader dependencyLoader = new DependencyClassLoader(coreClassLoader, archive, Util.join(dependencies,optionalDependencies));
+        ClassLoader dependencyLoader = new DependencyClassLoader(
+                getClass().getClassLoader(), archive, Util.join(dependencies, optionalDependencies), pluginManager);
         dependencyLoader = getBaseClassLoader(atts, dependencyLoader);
 
         return new PluginWrapper(pluginManager, archive, manifest, baseResourceURL,
-                createClassLoader(paths, dependencyLoader, atts), disableFile, dependencies, optionalDependencies);
+                createClassLoader(computeClassLoaderName(manifest, archive), paths, dependencyLoader, atts), disableFile, dependencies, optionalDependencies);
     }
 
-    private static void fix(Attributes atts, List<PluginWrapper.Dependency> optionalDependencies) {
+    private static String computeClassLoaderName(Manifest mf, File archive) {
+        return "PluginClassLoader for " + PluginWrapper.computeShortName(mf, archive.getName());
+    }
+
+    private void fix(Attributes atts, List<PluginWrapper.Dependency> optionalDependencies) {
         String pluginName = atts.getValue("Short-Name");
-        
+
         String jenkinsVersion = atts.getValue("Jenkins-Version");
-        if (jenkinsVersion==null)
+        if (jenkinsVersion == null)
             jenkinsVersion = atts.getValue("Hudson-Version");
-        
-        optionalDependencies.addAll(getImpliedDependencies(pluginName, jenkinsVersion));
-    }
-    
-    /**
-     * Returns all the plugin dependencies that are implicit based on a particular Jenkins version
-     * @since 2.0
-     */
-    @Nonnull
-    public static List<PluginWrapper.Dependency> getImpliedDependencies(String pluginName, String jenkinsVersion) {
-        List<PluginWrapper.Dependency> out = new ArrayList<>();
-        for (DetachedPlugin detached : DETACHED_LIST) {
-            // don't fix the dependency for itself, or else we'll have a cycle
-            if (detached.shortName.equals(pluginName)) {
-                continue;
-            }
-            if (BREAK_CYCLES.contains(pluginName + ' ' + detached.shortName)) {
-                LOGGER.log(Level.FINE, "skipping implicit dependency {0} → {1}", new Object[] {pluginName, detached.shortName});
-                continue;
-            }
-            // some earlier versions of maven-hpi-plugin apparently puts "null" as a literal in Hudson-Version. watch out for them.
-            if (jenkinsVersion == null || jenkinsVersion.equals("null") || new VersionNumber(jenkinsVersion).compareTo(detached.splitWhen) <= 0) {
-                out.add(new PluginWrapper.Dependency(detached.shortName + ':' + detached.requiredVersion));
-                LOGGER.log(Level.FINE, "adding implicit dependency {0} → {1} because of {2}", new Object[] {pluginName, detached.shortName, jenkinsVersion});
-            }
+
+        for (Dependency d : DetachedPluginsUtil.getImpliedDependencies(pluginName, jenkinsVersion)) {
+            LOGGER.fine(() -> "implied dep " + pluginName + " → " + d.shortName);
+            pluginManager.considerDetachedPlugin(d.shortName, pluginName);
+            optionalDependencies.add(d);
         }
-        return out;
     }
 
+    /**
+     * @see DetachedPluginsUtil#getImpliedDependencies(String, String)
+     *
+     * @deprecated since 2.163
+     */
     @Deprecated
+    @NonNull
+    public static List<PluginWrapper.Dependency> getImpliedDependencies(String pluginName, String jenkinsVersion) {
+        return DetachedPluginsUtil.getImpliedDependencies(pluginName, jenkinsVersion);
+    }
+
+    /**
+     * @deprecated since 2.459 use {@link #createClassLoader(String, List, ClassLoader, Attributes)}
+     */
+    @Deprecated(since = "2.459")
     protected ClassLoader createClassLoader(List<File> paths, ClassLoader parent) throws IOException {
-        return createClassLoader( paths, parent, null );
+        return createClassLoader(paths, parent, null);
     }
 
     /**
-     * Creates the classloader that can load all the specified jar files and delegate to the given parent.
+     * @deprecated since 2.459 use {@link #createClassLoader(String, List, ClassLoader, Attributes)}
      */
+    @Deprecated(since="2.459")
     protected ClassLoader createClassLoader(List<File> paths, ClassLoader parent, Attributes atts) throws IOException {
-        if (atts != null) {
-            String usePluginFirstClassLoader = atts.getValue( "PluginFirstClassLoader" );
-            if (Boolean.valueOf( usePluginFirstClassLoader )) {
-                PluginFirstClassLoader classLoader = new PluginFirstClassLoader();
-                classLoader.setParentFirst( false );
-                classLoader.setParent( parent );
-                classLoader.addPathFiles( paths );
-                return classLoader;
-            }
-        }
+        // generate a legacy id so at least we can track to something
+        return createClassLoader("unidentified-" + UUID.randomUUID(), paths, parent, atts);
+    }
 
-        AntClassLoader2 classLoader = new AntClassLoader2(parent);
-        classLoader.addPathFiles(paths);
+    /**
+     * Creates a  classloader that can load all the specified jar files and delegate to the given parent.
+     * @since 2.459
+     */
+    protected ClassLoader createClassLoader(String name, List<File> paths, ClassLoader parent, Attributes atts) throws IOException {
+        boolean usePluginFirstClassLoader =
+                atts != null && Boolean.parseBoolean(atts.getValue("PluginFirstClassLoader"));
+
+        List<URL> urls = new ArrayList<>();
+        for (File path : paths) {
+            if (path.getName().startsWith("jenkins-test-harness")) {
+                throw new IllegalStateException("Refusing to load the Jenkins test harness in production (via "
+                        + atts.getValue("Short-Name") + ")");
+            }
+            urls.add(path.toURI().toURL());
+        }
+        URLClassLoader2 classLoader;
+        if (usePluginFirstClassLoader) {
+            classLoader = new PluginFirstClassLoader2(name, urls.toArray(new URL[0]), parent);
+        } else {
+            classLoader = new URLClassLoader2(name, urls.toArray(new URL[0]), parent);
+        }
         return classLoader;
-    }
-
-    /**
-     * Get the list of all plugins that have ever been {@link DetachedPlugin detached} from Jenkins core.
-     * @return A {@link List} of {@link DetachedPlugin}s.
-     */
-    @Restricted(NoExternalUse.class)
-    public static @Nonnull List<DetachedPlugin> getDetachedPlugins() {
-        return DETACHED_LIST;
-    }
-
-    /**
-     * Get the list of plugins that have been detached since a specific Jenkins release version.
-     * @param since The Jenkins version.
-     * @return A {@link List} of {@link DetachedPlugin}s.
-     */
-    @Restricted(NoExternalUse.class)
-    public static @Nonnull List<DetachedPlugin> getDetachedPlugins(@Nonnull VersionNumber since) {
-        List<DetachedPlugin> detachedPlugins = new ArrayList<>();
-
-        for (DetachedPlugin detachedPlugin : DETACHED_LIST) {
-            if (!detachedPlugin.getSplitWhen().isOlderThan(since)) {
-                detachedPlugins.add(detachedPlugin);
-            }
-        }
-
-        return detachedPlugins;
-    }
-
-    /**
-     * Is the named plugin a plugin that was detached from Jenkins at some point in the past.
-     * @param pluginId The plugin ID.
-     * @return {@code true} if the plugin is a plugin that was detached from Jenkins at some
-     * point in the past, otherwise {@code false}.
-     */
-    @Restricted(NoExternalUse.class)
-    public static boolean isDetachedPlugin(@Nonnull String pluginId) {
-        for (DetachedPlugin detachedPlugin : DETACHED_LIST) {
-            if (detachedPlugin.getShortName().equals(pluginId)) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    /**
-     * Information about plugins that were originally in the core.
-     * <p>
-     * A detached plugin is one that has any of the following characteristics:
-     * <ul>
-     *     <li>
-     *         Was an existing plugin that at some time previously bundled with the Jenkins war file.
-     *     </li>
-     *     <li>
-     *         Was previous code in jenkins core that was split to a separate-plugin (but may not have
-     *         ever been bundled in a jenkins war file - i.e. it gets split after this 2.0 update).
-     *     </li>
-     * </ul>
-     */
-    @Restricted(NoExternalUse.class)
-    public static final class DetachedPlugin {
-        private final String shortName;
-        /**
-         * Plugins built for this Jenkins version (and earlier) will automatically be assumed to have
-         * this plugin in its dependency.
-         *
-         * When core/pom.xml version is 1.123-SNAPSHOT when the code is removed, then this value should
-         * be "1.123.*" (because 1.124 will be the first version that doesn't include the removed code.)
-         */
-        private final VersionNumber splitWhen;
-        private final String requiredVersion;
-
-        private DetachedPlugin(String shortName, String splitWhen, String requiredVersion) {
-            this.shortName = shortName;
-            this.splitWhen = new VersionNumber(splitWhen);
-            this.requiredVersion = requiredVersion;
-        }
-
-        /**
-         * Get the short name of the plugin.
-         * @return The short name of the plugin.
-         */
-        public String getShortName() {
-            return shortName;
-        }
-
-        /**
-         * Get the Jenkins version from which the plugin was detached.
-         * @return The Jenkins version from which the plugin was detached.
-         */
-        public VersionNumber getSplitWhen() {
-            return splitWhen;
-        }
-
-        /**
-         * Gets the minimum required version for the current version of Jenkins.
-         *
-         * @return the minimum required version for the current version of Jenkins.
-         * @since 2.16
-         */
-        public VersionNumber getRequiredVersion() {
-            return new VersionNumber(requiredVersion);
-        }
-
-        @Override
-        public String toString() {
-            return shortName + " " + splitWhen.toString().replace(".*", "") + " " + requiredVersion;
-        }
-    }
-
-    /** Record of which plugins which removed from core and when. */
-    private static final List<DetachedPlugin> DETACHED_LIST;
-
-    /** Implicit dependencies that are known to be unnecessary and which must be cut out to prevent a dependency cycle among bundled plugins. */
-    private static final Set<String> BREAK_CYCLES;
-
-    static {
-        try (InputStream is = ClassicPluginStrategy.class.getResourceAsStream("/jenkins/split-plugins.txt")) {
-            DETACHED_LIST = ImmutableList.copyOf(configLines(is).map(line -> {
-                String[] pieces = line.split(" ");
-                return new DetachedPlugin(pieces[0], pieces[1] + ".*", pieces[2]);
-            }).collect(Collectors.toList()));
-        } catch (IOException x) {
-            throw new ExceptionInInitializerError(x);
-        }
-        try (InputStream is = ClassicPluginStrategy.class.getResourceAsStream("/jenkins/split-plugin-cycles.txt")) {
-            BREAK_CYCLES = ImmutableSet.copyOf(configLines(is).collect(Collectors.toSet()));
-        } catch (IOException x) {
-            throw new ExceptionInInitializerError(x);
-        }
-    }
-    private static Stream<String> configLines(InputStream is) throws IOException {
-        return org.apache.commons.io.IOUtils.readLines(is, StandardCharsets.UTF_8).stream().filter(line -> !line.matches("#.*|\\s*"));
     }
 
     /**
@@ -460,53 +318,56 @@ public class ClassicPluginStrategy implements PluginStrategy {
      */
     private ClassLoader getBaseClassLoader(Attributes atts, ClassLoader base) {
         String masked = atts.getValue("Mask-Classes");
-        if(masked!=null)
+        if (masked != null)
             base = new MaskingClassLoader(base, masked.trim().split("[ \t\r\n]+"));
         return base;
     }
 
+    @Override
     public void initializeComponents(PluginWrapper plugin) {
     }
 
+    @Override
     public <T> List<ExtensionComponent<T>> findComponents(Class<T> type, Hudson hudson) {
 
         List<ExtensionFinder> finders;
-        if (type==ExtensionFinder.class) {
+        if (type == ExtensionFinder.class) {
             // Avoid infinite recursion of using ExtensionFinders to find ExtensionFinders
-            finders = Collections.<ExtensionFinder>singletonList(new ExtensionFinder.Sezpoz());
+            finders = List.of(new ExtensionFinder.Sezpoz());
         } else {
             finders = hudson.getExtensionList(ExtensionFinder.class);
         }
 
-        /**
-         * See {@link ExtensionFinder#scout(Class, Hudson)} for the dead lock issue and what this does.
+        /*
+         * See ExtensionFinder#scout(Class, Hudson) for the dead lock issue and what this does.
          */
         if (LOGGER.isLoggable(Level.FINER))
-            LOGGER.log(Level.FINER,"Scout-loading ExtensionList: "+type, new Throwable());
+            LOGGER.log(Level.FINER, "Scout-loading ExtensionList: " + type, new Throwable());
         for (ExtensionFinder finder : finders) {
             finder.scout(type, hudson);
         }
 
-        List<ExtensionComponent<T>> r = Lists.newArrayList();
+        List<ExtensionComponent<T>> r = new ArrayList<>();
         for (ExtensionFinder finder : finders) {
             try {
                 r.addAll(finder.find(type, hudson));
             } catch (AbstractMethodError e) {
                 // backward compatibility
                 for (T t : finder.findExtensions(type, hudson))
-                    r.add(new ExtensionComponent<T>(t));
+                    r.add(new ExtensionComponent<>(t));
             }
         }
 
-        List<ExtensionComponent<T>> filtered = Lists.newArrayList();
+        List<ExtensionComponent<T>> filtered = new ArrayList<>();
         for (ExtensionComponent<T> e : r) {
-            if (ExtensionFilter.isAllowed(type,e))
+            if (ExtensionFilter.isAllowed(type, e))
                 filtered.add(e);
         }
 
         return filtered;
     }
 
+    @Override
     public void load(PluginWrapper wrapper) throws IOException {
         // override the context classloader. This no longer makes sense,
         // but it is left for the backward compatibility
@@ -514,32 +375,32 @@ public class ClassicPluginStrategy implements PluginStrategy {
         Thread.currentThread().setContextClassLoader(wrapper.classLoader);
         try {
             String className = wrapper.getPluginClass();
-            if(className==null) {
+            if (className == null) {
                 // use the default dummy instance
                 wrapper.setPlugin(new DummyImpl());
             } else {
                 try {
                     Class<?> clazz = wrapper.classLoader.loadClass(className);
-                    Object o = clazz.newInstance();
-                    if(!(o instanceof Plugin)) {
-                        throw new IOException(className+" doesn't extend from hudson.Plugin");
+                    Object o = clazz.getDeclaredConstructor().newInstance();
+                    if (!(o instanceof Plugin)) {
+                        throw new IOException(className + " doesn't extend from hudson.Plugin");
                     }
                     wrapper.setPlugin((Plugin) o);
                 } catch (LinkageError | ClassNotFoundException e) {
-                    throw new IOException("Unable to load " + className + " from " + wrapper.getShortName(),e);
-                } catch (IllegalAccessException | InstantiationException e) {
-                    throw new IOException("Unable to create instance of " + className + " from " + wrapper.getShortName(),e);
+                    throw new IOException("Unable to load " + className + " from " + wrapper.getShortName(), e);
+                } catch (NoSuchMethodException | InstantiationException | IllegalAccessException | InvocationTargetException e) {
+                    throw new IOException("Unable to create instance of " + className + " from " + wrapper.getShortName(), e);
                 }
             }
 
             // initialize plugin
             try {
-                Plugin plugin = wrapper.getPlugin();
+                Plugin plugin = wrapper.getPluginOrFail();
                 plugin.setServletContext(pluginManager.context);
                 startPlugin(wrapper);
-            } catch(Throwable t) {
+            } catch (Throwable t) {
                 // gracefully handle any error in plugin.
-                throw new IOException("Failed to initialize",t);
+                throw new IOException("Failed to initialize", t);
             }
         } finally {
             Thread.currentThread().setContextClassLoader(old);
@@ -547,14 +408,14 @@ public class ClassicPluginStrategy implements PluginStrategy {
     }
 
     public void startPlugin(PluginWrapper plugin) throws Exception {
-        plugin.getPlugin().start();
+        plugin.getPluginOrFail().start();
     }
 
     @Override
     public void updateDependency(PluginWrapper depender, PluginWrapper dependee) {
         DependencyClassLoader classLoader = findAncestorDependencyClassLoader(depender.classLoader);
         if (classLoader != null) {
-            classLoader.updateTransientDependencies();
+            classLoader.updateTransitiveDependencies();
             LOGGER.log(Level.INFO, "Updated dependency of {0}", depender.getShortName());
         }
     }
@@ -563,48 +424,38 @@ public class ClassicPluginStrategy implements PluginStrategy {
     {
         for (; classLoader != null; classLoader = classLoader.getParent()) {
             if (classLoader instanceof DependencyClassLoader) {
-                return (DependencyClassLoader)classLoader;
-            }
-            
-            if (classLoader instanceof AntClassLoader) {
-                // AntClassLoaders hold parents not only as AntClassLoader#getParent()
-                // but also as AntClassLoader#getConfiguredParent()
-                DependencyClassLoader ret = findAncestorDependencyClassLoader(
-                        ((AntClassLoader)classLoader).getConfiguredParent()
-                );
-                if (ret != null) {
-                    return ret;
-                }
+                return (DependencyClassLoader) classLoader;
             }
         }
         return null;
     }
 
+    @SuppressFBWarnings(value = "PATH_TRAVERSAL_IN", justification = "Administrator action installing a plugin, which could do far worse.")
     private static File resolve(File base, String relative) {
         File rel = new File(relative);
-        if(rel.isAbsolute())
+        if (rel.isAbsolute())
             return rel;
         else
-            return new File(base.getParentFile(),relative);
+            return new File(base.getParentFile(), relative);
     }
 
     private static void parseClassPath(Manifest manifest, File archive, List<File> paths, String attributeName, String separator) throws IOException {
         String classPath = manifest.getMainAttributes().getValue(attributeName);
-        if(classPath==null) return; // attribute not found
+        if (classPath == null) return; // attribute not found
         for (String s : classPath.split(separator)) {
             File file = resolve(archive, s);
-            if(file.getName().contains("*")) {
+            if (file.getName().contains("*")) {
                 // handle wildcard
                 FileSet fs = new FileSet();
                 File dir = file.getParentFile();
                 fs.setDir(dir);
                 fs.setIncludes(file.getName());
-                for( String included : fs.getDirectoryScanner(new Project()).getIncludedFiles() ) {
-                    paths.add(new File(dir,included));
+                for (String included : fs.getDirectoryScanner(new Project()).getIncludedFiles()) {
+                    paths.add(new File(dir, included));
                 }
             } else {
-                if(!file.exists())
-                    throw new IOException("No such file: "+file);
+                if (!file.exists())
+                    throw new IOException("No such file: " + file);
                 paths.add(file);
             }
         }
@@ -614,11 +465,11 @@ public class ClassicPluginStrategy implements PluginStrategy {
      * Explodes the plugin into a directory, if necessary.
      */
     private static void explode(File archive, File destDir) throws IOException {
-        destDir.mkdirs();
+        Util.createDirectories(Util.fileToPath(destDir));
 
         // timestamp check
-        File explodeTime = new File(destDir,".timestamp2");
-        if(explodeTime.exists() && explodeTime.lastModified()==archive.lastModified())
+        File explodeTime = new File(destDir, ".timestamp2");
+        if (explodeTime.exists() && explodeTime.lastModified() == archive.lastModified())
             return; // no need to expand
 
         // delete the contents so that old files won't interfere with new files
@@ -629,7 +480,7 @@ public class ClassicPluginStrategy implements PluginStrategy {
             unzipExceptClasses(archive, destDir, prj);
             createClassJarFromWebInfClasses(archive, destDir, prj);
         } catch (BuildException x) {
-            throw new IOException("Failed to expand " + archive,x);
+            throw new IOException("Failed to expand " + archive, x);
         }
 
         try {
@@ -661,10 +512,10 @@ public class ClassicPluginStrategy implements PluginStrategy {
 
         final long dirTime = archive.lastModified();
         // this ZipOutputStream is reused and not created for each directory
-        try (ZipOutputStream wrappedZOut = new ZipOutputStream(new NullOutputStream()) {
+        try (OutputStream nos = OutputStream.nullOutputStream(); ZipOutputStream wrappedZOut = new ZipOutputStream(nos) {
             @Override
             public void putNextEntry(ZipEntry ze) throws IOException {
-                ze.setTime(dirTime+1999);   // roundup
+                ze.setTime(dirTime + 1999);   // roundup
                 super.putNextEntry(ze);
             }
         }) {
@@ -673,16 +524,17 @@ public class ClassicPluginStrategy implements PluginStrategy {
                  * Forces the fixed timestamp for directories to make sure
                  * classes.jar always get a consistent checksum.
                  */
+                @Override
                 protected void zipDir(Resource dir, ZipOutputStream zOut, String vPath,
                                       int mode, ZipExtraField[] extra)
                     throws IOException {
                     // use wrappedZOut instead of zOut
-                    super.zipDir(dir,wrappedZOut,vPath,mode,extra);
+                    super.zipDir(dir, wrappedZOut, vPath, mode, extra);
                 }
             };
             z.setProject(prj);
             z.setTaskType("zip");
-            classesJar.getParentFile().mkdirs();
+            Util.createDirectories(Util.fileToPath(classesJar.getParentFile()));
             z.setDestFile(classesJar);
             z.add(mapper);
             z.execute();
@@ -707,7 +559,7 @@ public class ClassicPluginStrategy implements PluginStrategy {
     /**
      * Used to load classes from dependency plugins.
      */
-    final class DependencyClassLoader extends ClassLoader {
+    static final class DependencyClassLoader extends ClassLoader {
         /**
          * This classloader is created for this plugin. Useful during debugging.
          */
@@ -715,31 +567,42 @@ public class ClassicPluginStrategy implements PluginStrategy {
 
         private List<Dependency> dependencies;
 
-        /**
-         * Topologically sorted list of transient dependencies.
-         */
-        private volatile List<PluginWrapper> transientDependencies;
+        private final PluginManager pluginManager;
 
-        public DependencyClassLoader(ClassLoader parent, File archive, List<Dependency> dependencies) {
-            super(parent);
-            this._for = archive;
-            this.dependencies = dependencies;
+        /**
+         * Topologically sorted list of transitive dependencies. Lazily initialized via double-checked locking.
+         */
+        private volatile List<PluginWrapper> transitiveDependencies;
+
+        static {
+            registerAsParallelCapable();
         }
 
-        private void updateTransientDependencies() {
+        DependencyClassLoader(ClassLoader parent, File archive, List<Dependency> dependencies, PluginManager pluginManager) {
+            super("dependency ClassLoader for " + archive.getPath(), parent);
+            this._for = archive;
+            this.dependencies = List.copyOf(dependencies);
+            this.pluginManager = pluginManager;
+        }
+
+        private void updateTransitiveDependencies() {
             // This will be recalculated at the next time.
-            transientDependencies = null;
+            transitiveDependencies = null;
         }
 
         private List<PluginWrapper> getTransitiveDependencies() {
-            if (transientDependencies==null) {
-                CyclicGraphDetector<PluginWrapper> cgd = new CyclicGraphDetector<PluginWrapper>() {
+          List<PluginWrapper> localTransitiveDependencies = transitiveDependencies;
+          if (localTransitiveDependencies == null) {
+            synchronized (this) {
+              localTransitiveDependencies = transitiveDependencies;
+              if (localTransitiveDependencies == null) {
+                CyclicGraphDetector<PluginWrapper> cgd = new CyclicGraphDetector<>() {
                     @Override
                     protected List<PluginWrapper> getEdges(PluginWrapper pw) {
-                        List<PluginWrapper> dep = new ArrayList<PluginWrapper>();
+                        List<PluginWrapper> dep = new ArrayList<>();
                         for (Dependency d : pw.getDependencies()) {
                             PluginWrapper p = pluginManager.getPlugin(d.shortName);
-                            if (p!=null && p.isActive())
+                            if (p != null && p.isActive())
                                 dep.add(p);
                         }
                         return dep;
@@ -749,48 +612,40 @@ public class ClassicPluginStrategy implements PluginStrategy {
                 try {
                     for (Dependency d : dependencies) {
                         PluginWrapper p = pluginManager.getPlugin(d.shortName);
-                        if (p!=null && p.isActive())
-                            cgd.run(Collections.singleton(p));
+                        if (p != null && p.isActive())
+                            cgd.run(Set.of(p));
                     }
                 } catch (CycleDetectedException e) {
                     throw new AssertionError(e);    // such error should have been reported earlier
                 }
 
-                transientDependencies = cgd.getSorted();
+                transitiveDependencies = localTransitiveDependencies = cgd.getSorted();
+              }
             }
-            return transientDependencies;
+          }
+          return localTransitiveDependencies;
         }
-
-//        public List<PluginWrapper> getDependencyPluginWrappers() {
-//            List<PluginWrapper> r = new ArrayList<PluginWrapper>();
-//            for (Dependency d : dependencies) {
-//                PluginWrapper w = pluginManager.getPlugin(d.shortName);
-//                if (w!=null)    r.add(w);
-//            }
-//            return r;
-//        }
 
         @Override
         protected Class<?> findClass(String name) throws ClassNotFoundException {
             if (PluginManager.FAST_LOOKUP) {
                 for (PluginWrapper pw : getTransitiveDependencies()) {
                     try {
-                        Class<?> c = ClassLoaderReflectionToolkit._findLoadedClass(pw.classLoader, name);
-                        if (c!=null)    return c;
-                        return ClassLoaderReflectionToolkit._findClass(pw.classLoader, name);
-                    } catch (ClassNotFoundException e) {
+                        return ClassLoaderReflectionToolkit.loadClass(pw.classLoader, name);
+                    } catch (ClassNotFoundException ignored) {
                         //not found. try next
                     }
                 }
             } else {
                 for (Dependency dep : dependencies) {
                     PluginWrapper p = pluginManager.getPlugin(dep.shortName);
-                    if(p!=null)
+                    if (p != null) {
                         try {
                             return p.classLoader.loadClass(name);
-                        } catch (ClassNotFoundException _) {
-                            // try next
+                        } catch (ClassNotFoundException ignored) {
+                            // OK, try next
                         }
+                    }
                 }
             }
 
@@ -798,8 +653,10 @@ public class ClassicPluginStrategy implements PluginStrategy {
         }
 
         @Override
+        @SuppressFBWarnings(value = "DMI_COLLECTION_OF_URLS",
+                            justification = "Should not produce network overheads since the URL is local. JENKINS-53793 is a follow-up")
         protected Enumeration<URL> findResources(String name) throws IOException {
-            HashSet<URL> result = new HashSet<URL>();
+            HashSet<URL> result = new HashSet<>();
 
             if (PluginManager.FAST_LOOKUP) {
                     for (PluginWrapper pw : getTransitiveDependencies()) {
@@ -810,7 +667,7 @@ public class ClassicPluginStrategy implements PluginStrategy {
             } else {
                 for (Dependency dep : dependencies) {
                     PluginWrapper p = pluginManager.getPlugin(dep.shortName);
-                    if (p!=null) {
+                    if (p != null) {
                         Enumeration<URL> urls = p.classLoader.getResources(name);
                         while (urls != null && urls.hasMoreElements())
                             result.add(urls.nextElement());
@@ -826,14 +683,14 @@ public class ClassicPluginStrategy implements PluginStrategy {
             if (PluginManager.FAST_LOOKUP) {
                     for (PluginWrapper pw : getTransitiveDependencies()) {
                         URL url = ClassLoaderReflectionToolkit._findResource(pw.classLoader, name);
-                        if (url!=null)    return url;
+                        if (url != null)    return url;
                     }
             } else {
                 for (Dependency dep : dependencies) {
                     PluginWrapper p = pluginManager.getPlugin(dep.shortName);
-                    if(p!=null) {
+                    if (p != null) {
                         URL url = p.classLoader.getResource(name);
-                        if (url!=null)
+                        if (url != null)
                             return url;
                     }
                 }
@@ -842,24 +699,4 @@ public class ClassicPluginStrategy implements PluginStrategy {
             return null;
         }
     }
-
-    /**
-     * {@link AntClassLoader} with a few methods exposed, {@link Closeable} support, and {@link Transformer} support.
-     */
-    private final class AntClassLoader2 extends AntWithFindResourceClassLoader implements Closeable {
-        private AntClassLoader2(ClassLoader parent) {
-            super(parent, true);
-        }
-        
-        @Override
-        protected Class defineClassFromData(File container, byte[] classData, String classname) throws IOException {
-            if (!DISABLE_TRANSFORMER)
-                classData = pluginManager.getCompatibilityTransformer().transform(classname, classData, this);
-            return super.defineClassFromData(container, classData, classname);
-        }
-    }
-
-    public static boolean useAntClassLoader = SystemProperties.getBoolean(ClassicPluginStrategy.class.getName()+".useAntClassLoader");
-    private static final Logger LOGGER = Logger.getLogger(ClassicPluginStrategy.class.getName());
-    public static boolean DISABLE_TRANSFORMER = SystemProperties.getBoolean(ClassicPluginStrategy.class.getName()+".noBytecodeTransformer");
 }

@@ -1,8 +1,22 @@
 package hudson.model;
 
-import com.google.common.base.Throwables;
-import jenkins.model.Jenkins;
-import org.apache.commons.io.FileUtils;
+import static java.lang.System.currentTimeMillis;
+import static java.util.Collections.emptyMap;
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.hasSize;
+import static org.hamcrest.Matchers.is;
+import static org.hamcrest.Matchers.notNullValue;
+import static org.htmlunit.html.HtmlFormUtil.submit;
+import static org.junit.Assert.assertNotNull;
+
+import java.io.File;
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.StandardOpenOption;
+import java.util.Collections;
+import java.util.List;
 import org.hamcrest.BaseMatcher;
 import org.hamcrest.Description;
 import org.hamcrest.Matcher;
@@ -14,22 +28,6 @@ import org.jvnet.hudson.test.TestExtension;
 import org.jvnet.hudson.test.recipes.LocalData;
 import org.kohsuke.stapler.DataBoundConstructor;
 
-import java.io.File;
-import java.io.IOException;
-import java.util.Collections;
-import java.util.List;
-
-import static hudson.model.User.idStrategy;
-import static hudson.model.UserPropertyTest.InnerUserClass.TEST_FILE;
-import static java.lang.System.currentTimeMillis;
-import static java.util.Collections.emptyMap;
-import static org.apache.commons.io.FileUtils.writeStringToFile;
-import static org.hamcrest.Matchers.hasSize;
-import static org.hamcrest.Matchers.is;
-import static org.hamcrest.core.IsNull.notNullValue;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertThat;
-
 /**
  * @author Kohsuke Kawaguchi
  */
@@ -38,12 +36,17 @@ public class UserPropertyTest {
     @Rule
     public JenkinsRule j = new JenkinsRule();
 
+    public User configRoundtrip(User u) throws Exception {
+        submit(j.createWebClient().goTo(u.getUrl()+"/account/").getFormByName("config"));
+        return u;
+    }
+
     @Test
     @Issue("JENKINS-9062")
     public void test() throws Exception {
         User u = User.get("foo");
         u.addProperty(new UserProperty1());
-        j.configRoundtrip(u);
+        configRoundtrip(u);
         for (UserProperty p : u.getAllProperties())
             assertNotNull(p);
     }
@@ -80,22 +83,22 @@ public class UserPropertyTest {
         User user = User.get("nestedUserReference", false, emptyMap());
         assertThat("nested reference should be updated after jenkins start", user, nestedUserSet());
 
-        File testFile = new File(j.getInstance().getRootDir() + "/users/nesteduserreference/" + TEST_FILE);
-        List<String> fileLines = FileUtils.readLines(testFile);
+        SetUserUserProperty property = user.getProperty(SetUserUserProperty.class);
+        File testFile = property.getInnerUserClass().userFile;
+        List<String> fileLines = Files.readAllLines(testFile.toPath(), StandardCharsets.US_ASCII);
         assertThat(fileLines, hasSize(1));
 
-        j.configRoundtrip(user);
+        configRoundtrip(user);
 
         user = User.get("nestedUserReference", false, Collections.emptyMap());
         assertThat("nested reference should exist after user configuration change", user, nestedUserSet());
 
-        testFile = new File(j.getInstance().getRootDir() + "/users/nesteduserreference/" + TEST_FILE);
-        fileLines = FileUtils.readLines(testFile);
+        fileLines = Files.readAllLines(testFile.toPath(), StandardCharsets.US_ASCII);
         assertThat(fileLines, hasSize(1));
     }
 
     public static Matcher<User> nestedUserSet() {
-        return new BaseMatcher<User>() {
+        return new BaseMatcher<>() {
             @Override
             public boolean matches(Object item) {
                 User user = (User) item;
@@ -167,8 +170,9 @@ public class UserPropertyTest {
      * Class that should get setUser(User) object reference update.
      */
     public static class InnerUserClass extends AbstractDescribableImpl<InnerUserClass> {
-        public static final String TEST_FILE = "test.txt";
         private transient User user;
+
+        private transient File userFile;
 
         @DataBoundConstructor
         public InnerUserClass() {
@@ -184,16 +188,16 @@ public class UserPropertyTest {
         public void setUser(User user) {
             this.user = user;
             try {
-                writeStringToFile(getUserFile(), String.valueOf(currentTimeMillis()), true);
+                File userFile = getUserFile();
+                Files.writeString(userFile.toPath(), String.valueOf(currentTimeMillis()), StandardCharsets.US_ASCII, StandardOpenOption.APPEND);
             } catch (IOException e) {
-                Throwables.propagate(e);
+                throw new UncheckedIOException(e);
             }
         }
 
         private File getUserFile() throws IOException {
-            final File usersRootDir = new File(Jenkins.getInstance().getRootDir(), "users");
-            final File userDir = new File(usersRootDir, idStrategy().filenameOf(user.getId()));
-            final File userFile = new File(userDir, TEST_FILE);
+            userFile =  File.createTempFile("user", ".txt");
+            userFile.deleteOnExit();
             if (!userFile.exists()) {
                 userFile.createNewFile();
             }

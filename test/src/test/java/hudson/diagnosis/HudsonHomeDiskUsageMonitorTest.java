@@ -2,30 +2,28 @@ package hudson.diagnosis;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
 
-import com.gargoylesoftware.htmlunit.FailingHttpStatusCodeException;
-import com.gargoylesoftware.htmlunit.HttpMethod;
-import com.gargoylesoftware.htmlunit.WebRequest;
-import com.gargoylesoftware.htmlunit.util.NameValuePair;
 import hudson.model.User;
 import hudson.security.GlobalMatrixAuthorizationStrategy;
+import java.io.IOException;
+import java.net.HttpURLConnection;
+import java.net.URI;
+import java.util.List;
 import jenkins.model.Jenkins;
-import jenkins.security.apitoken.ApiTokenPropertyConfiguration;
-import jenkins.security.apitoken.ApiTokenTestHelper;
+import org.htmlunit.ElementNotFoundException;
+import org.htmlunit.HttpMethod;
+import org.htmlunit.Page;
+import org.htmlunit.WebRequest;
+import org.htmlunit.html.HtmlForm;
+import org.htmlunit.html.HtmlPage;
+import org.htmlunit.util.NameValuePair;
 import org.junit.Rule;
 import org.junit.Test;
 import org.jvnet.hudson.test.Issue;
 import org.jvnet.hudson.test.JenkinsRule;
 import org.xml.sax.SAXException;
-import com.gargoylesoftware.htmlunit.html.HtmlPage;
-import com.gargoylesoftware.htmlunit.html.HtmlForm;
-import com.gargoylesoftware.htmlunit.ElementNotFoundException;
-
-import java.io.IOException;
-import java.net.URL;
-import java.util.Collections;
 
 /**
  * @author Kohsuke Kawaguchi
@@ -51,19 +49,14 @@ public class HudsonHomeDiskUsageMonitorTest {
         assertFalse(mon.isEnabled());
 
         // and make sure it's gone
-        try {
-            fail(getForm(mon)+" shouldn't be there");
-        } catch (ElementNotFoundException e) {
-            // as expected
-        }
+        assertThrows(ElementNotFoundException.class, () -> getForm(mon));
     }
 
     @Issue("SECURITY-371")
     @Test
     public void noAccessForNonAdmin() throws Exception {
-        ApiTokenTestHelper.enableLegacyBehavior();
-        
-        JenkinsRule.WebClient wc = j.createWebClient();
+        JenkinsRule.WebClient wc = j.createWebClient()
+                .withThrowExceptionOnFailingStatusCode(false);
 
         // TODO: Use MockAuthorizationStrategy in later versions
         JenkinsRule.DummySecurityRealm realm = j.createDummySecurityRealm();
@@ -78,33 +71,28 @@ public class HudsonHomeDiskUsageMonitorTest {
         User bob = User.getById("bob", true);
         User administrator = User.getById("administrator", true);
 
-        WebRequest request = new WebRequest(new URL(wc.getContextPath() + "administrativeMonitor/hudsonHomeIsFull/act"), HttpMethod.POST);
+        WebRequest request = new WebRequest(new URI(wc.getContextPath() + "administrativeMonitor/hudsonHomeIsFull/act").toURL(), HttpMethod.POST);
         NameValuePair param = new NameValuePair("no", "true");
-        request.setRequestParameters(Collections.singletonList(param));
+        request.setRequestParameters(List.of(param));
 
         HudsonHomeDiskUsageMonitor mon = HudsonHomeDiskUsageMonitor.get();
 
         wc.withBasicApiToken(bob);
-        try {
-            wc.getPage(request);
-            fail();
-        } catch (FailingHttpStatusCodeException e) {
-            assertEquals(403, e.getStatusCode());
-        }
+        Page p = wc.getPage(request);
+        assertEquals(HttpURLConnection.HTTP_FORBIDDEN, p.getWebResponse().getStatusCode());
+
         assertTrue(mon.isEnabled());
 
-        WebRequest requestReadOnly = new WebRequest(new URL(wc.getContextPath() + "administrativeMonitor/hudsonHomeIsFull"), HttpMethod.GET);
-        try {
-            wc.getPage(requestReadOnly);
-            fail();
-        } catch (FailingHttpStatusCodeException e) {
-            assertEquals(403, e.getStatusCode());
-        }
+        WebRequest requestReadOnly = new WebRequest(new URI(wc.getContextPath() + "administrativeMonitor/hudsonHomeIsFull").toURL(), HttpMethod.GET);
+        p = wc.getPage(requestReadOnly);
+        assertEquals(HttpURLConnection.HTTP_FORBIDDEN, p.getWebResponse().getStatusCode());
 
         wc.withBasicApiToken(administrator);
-        wc.getPage(request);
+        request = new WebRequest(new URI(wc.getContextPath() + "administrativeMonitor/hudsonHomeIsFull/act").toURL(), HttpMethod.POST);
+        request.setRequestParameters(List.of(param));
+        p = wc.getPage(request);
+        assertEquals(HttpURLConnection.HTTP_OK, p.getWebResponse().getStatusCode());
         assertFalse(mon.isEnabled());
-
     }
 
     /**

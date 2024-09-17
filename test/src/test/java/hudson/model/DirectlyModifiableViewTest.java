@@ -21,25 +21,25 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
+
 package hudson.model;
 
-import static org.junit.Assert.*;
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 
 import java.io.IOException;
-import java.net.URL;
-
-
-import com.gargoylesoftware.htmlunit.WebRequest;
+import java.net.URI;
 import org.hamcrest.Matchers;
+import org.htmlunit.HttpMethod;
+import org.htmlunit.Page;
+import org.htmlunit.WebRequest;
+import org.htmlunit.WebResponse;
 import org.junit.Rule;
 import org.junit.Test;
 import org.jvnet.hudson.test.JenkinsRule;
 import org.jvnet.hudson.test.JenkinsRule.WebClient;
 import org.jvnet.hudson.test.MockFolder;
-
-import com.gargoylesoftware.htmlunit.HttpMethod;
-import com.gargoylesoftware.htmlunit.Page;
-import com.gargoylesoftware.htmlunit.WebResponse;
 
 public class DirectlyModifiableViewTest {
 
@@ -177,17 +177,18 @@ public class DirectlyModifiableViewTest {
         ListView folderView = new ListView("folder_view", folder);
         folder.addView(folderView);
 
-        assertBadStatus( // Item is scoped to different ItemGroup
+        // Item is scoped to different ItemGroup
+        assertBadStatus(
                 doPost(folderView, "addJobToView?name=top_project"),
                 "Query parameter 'name' does not correspond to a known item"
         );
     }
 
     private Page doPost(View view, String path) throws Exception {
-        WebClient wc = j.createWebClient();
-        wc.getOptions().setThrowExceptionOnFailingStatusCode(false);
+        WebClient wc = j.createWebClient()
+                .withThrowExceptionOnFailingStatusCode(false);
         WebRequest req = new WebRequest(
-                new URL(j.jenkins.getRootUrl() + view.getUrl() + path),
+                new URI(j.jenkins.getRootUrl() + view.getUrl() + path).toURL(),
                 HttpMethod.POST
         );
 

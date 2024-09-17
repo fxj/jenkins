@@ -34,7 +34,7 @@ def printEntry(warning, title, checked) {
         f.checkbox(name: warning.id,
                 title: title,
                 checked: checked,
-                class: 'hideWarnings');
+                class: 'hideWarnings')
         div(class: "setting-description") {
             a(warning.url, href: warning.url)
         }
@@ -52,12 +52,12 @@ f.section(title:_("Hidden security warnings")) {
             table(width:"100%") {
 
                 descriptor.applicableWarnings.each { warning ->
-                    if (warning.type == hudson.model.UpdateSite.Warning.Type.CORE) {
+                    if (warning.type == hudson.model.UpdateSite.WarningType.CORE) {
                         printEntry(warning,
                                 _("warning.core", warning.message),
                                 !descriptor.isIgnored(warning))
                     }
-                    else if (warning.type == hudson.model.UpdateSite.Warning.Type.PLUGIN) {
+                    else if (warning.type == hudson.model.UpdateSite.WarningType.PLUGIN) {
                         def plugin = descriptor.getPlugin(warning)
                         printEntry(warning,
                                 _("warning.plugin", plugin.displayName, warning.message),

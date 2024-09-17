@@ -1,18 +1,18 @@
 /*
  * The MIT License
- * 
+ *
  * Copyright (c) 2004-2010, Sun Microsystems, Inc., Kohsuke Kawaguchi
- * 
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
  * in the Software without restriction, including without limitation the rights
  * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
  * copies of the Software, and to permit persons to whom the Software is
  * furnished to do so, subject to the following conditions:
- * 
+ *
  * The above copyright notice and this permission notice shall be included in
  * all copies or substantial portions of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
  * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
@@ -24,16 +24,22 @@
 
 package hudson.util;
 
-import com.trilead.ssh2.crypto.Base64;
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.not;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotEquals;
+import static org.junit.Assert.assertTrue;
+
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
 import java.util.Random;
 import java.util.regex.Pattern;
 import javax.crypto.Cipher;
 import javax.crypto.SecretKey;
 import jenkins.model.Jenkins;
 import jenkins.security.ConfidentialStoreRule;
-import org.apache.commons.lang.RandomStringUtils;
-import static org.hamcrest.CoreMatchers.*;
-import static org.junit.Assert.*;
 import org.junit.Rule;
 import org.junit.Test;
 
@@ -41,9 +47,6 @@ public class SecretTest {
 
     @Rule
     public ConfidentialStoreRule confidentialStore = new ConfidentialStoreRule();
-
-    @Rule
-    public MockSecretRule mockSecretRule = new MockSecretRule();
 
     private static final Pattern ENCRYPTED_VALUE_PATTERN = Pattern.compile("\\{?[A-Za-z0-9+/]+={0,2}}?");
 
@@ -66,20 +69,29 @@ public class SecretTest {
 
     @Test
     public void encryptedValuePattern() {
+        final Random random = new Random();
         for (int i = 1; i < 100; i++) {
-            String plaintext = RandomStringUtils.random(new Random().nextInt(i));
+            String plaintext = random(i, random);
             String ciphertext = Secret.fromString(plaintext).getEncryptedValue();
             //println "${plaintext} → ${ciphertext}"
-            assert ENCRYPTED_VALUE_PATTERN.matcher(ciphertext).matches();
+            assertTrue(ENCRYPTED_VALUE_PATTERN.matcher(ciphertext).matches());
         }
         //Not "plain" text
-        assert !ENCRYPTED_VALUE_PATTERN.matcher("hello world").matches();
+        assertFalse(ENCRYPTED_VALUE_PATTERN.matcher("hello world").matches());
         //Not "plain" text
-        assert !ENCRYPTED_VALUE_PATTERN.matcher("helloworld!").matches();
+        assertFalse(ENCRYPTED_VALUE_PATTERN.matcher("helloworld!").matches());
         //legacy key
-        assert ENCRYPTED_VALUE_PATTERN.matcher("abcdefghijklmnopqr0123456789").matches();
+        assertTrue(ENCRYPTED_VALUE_PATTERN.matcher("abcdefghijklmnopqr0123456789").matches());
         //legacy key
-        assert ENCRYPTED_VALUE_PATTERN.matcher("abcdefghijklmnopqr012345678==").matches();
+        assertTrue(ENCRYPTED_VALUE_PATTERN.matcher("abcdefghijklmnopqr012345678==").matches());
+    }
+
+    private static String random(int count, Random random) {
+        String result = "";
+        for (int i = 0; i < count; i++) {
+            result += (char) random.nextInt(30000);
+        }
+        return result;
     }
 
     @Test
@@ -119,12 +131,13 @@ public class SecretTest {
      * Secret persisted with Jenkins.getSecretKey() should still decrypt OK.
      */
     @Test
+    @SuppressWarnings("deprecation")
     public void migrationFromLegacyKeyToConfidentialStore() throws Exception {
         SecretKey legacy = HistoricalSecrets.getLegacyKey();
         for (String str : new String[] {"Hello world", "", "\u0000unprintable"}) {
             Cipher cipher = Secret.getCipher("AES");
             cipher.init(Cipher.ENCRYPT_MODE, legacy);
-            String old = new String(Base64.encode(cipher.doFinal((str + HistoricalSecrets.MAGIC).getBytes("UTF-8"))));
+            String old = Base64.getEncoder().encodeToString(cipher.doFinal((str + HistoricalSecrets.MAGIC).getBytes(StandardCharsets.UTF_8)));
             Secret s = Secret.fromString(old);
             assertEquals("secret by the old key should decrypt", str, s.getPlainText());
             assertNotEquals("but when encrypting, ConfidentialKey should be in use", old, s.getEncryptedValue());

@@ -21,18 +21,22 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
+
 package jenkins.install;
+
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.equalTo;
+import static org.hamcrest.Matchers.instanceOf;
+import static org.junit.Assert.assertSame;
 
 import hudson.ExtensionList;
 import jenkins.model.Jenkins;
-import static org.hamcrest.CoreMatchers.equalTo;
-import static org.hamcrest.CoreMatchers.instanceOf;
-import static org.junit.Assert.assertThat;
-import static org.junit.Assert.assertTrue;
 import org.junit.Rule;
 import org.junit.Test;
+import org.junit.experimental.categories.Category;
 import org.jvnet.hudson.test.Issue;
 import org.jvnet.hudson.test.JenkinsRule;
+import org.jvnet.hudson.test.SmokeTest;
 
 /**
  * Tests of {@link InstallState}.
@@ -40,24 +44,25 @@ import org.jvnet.hudson.test.JenkinsRule;
  * honor Jenkins extension points and hooks, which may influence the behavior.
  * @author Oleg Nenashev
  */
+@Category(SmokeTest.class)
 public class InstallStateTest {
-    
+
     @Rule
     public JenkinsRule j = new JenkinsRule();
-    
+
     @Test
-    public void shouldPefromCorrectConversionForAllNames() {
+    public void shouldPerformCorrectConversionForAllNames() {
         ExtensionList<InstallState> states = InstallState.all();
         for (InstallState state : states) {
             InstallState afterRoundtrip = forName(state.name());
             // It also prevents occasional name duplications
-            assertThat("State after the roundtrip must be equal to the original state", 
+            assertThat("State after the roundtrip must be equal to the original state",
                     afterRoundtrip, equalTo(state));
-            assertTrue("State " + state + " should return the extension point instance after deserialization", 
-                    afterRoundtrip == state);
+            assertSame("State " + state + " should return the extension point instance after deserialization",
+                    afterRoundtrip, state);
         }
     }
-    
+
     @Test
     @Issue("JENKINS-35206")
     public void shouldNotFailOnNullXMLField() {
@@ -67,30 +72,30 @@ public class InstallStateTest {
         final InstallState state = forXml(xml);
         assertThat(state, equalTo(InstallState.UNKNOWN));
     }
-    
+
     @Test
     @Issue("JENKINS-35206")
     public void shouldNotFailOnEmptyName() {
         final InstallState state = forName("");
         assertThat(state, equalTo(InstallState.UNKNOWN));
     }
-    
+
     @Test
     @Issue("JENKINS-35206")
     public void shouldReturnUnknownStateForUnknownName() {
         final InstallState state = forName("NonExistentStateName");
         assertThat(state, equalTo(InstallState.UNKNOWN));
     }
-    
-    private static InstallState forName(String name) throws AssertionError {
+
+    private static InstallState forName(String name) {
         String xml = "<jenkins.install.InstallState>\n" +
             "  <isSetupComplete>true</isSetupComplete>\n" +
             "  <name>" + name + "</name>\n" +
             "</jenkins.install.InstallState>";
         return forXml(xml);
     }
-    
-    private static InstallState forXml(String xml) throws AssertionError {
+
+    private static InstallState forXml(String xml) {
         Object read = Jenkins.XSTREAM2.fromXML(xml);
         assertThat(read, instanceOf(InstallState.class));
         InstallState state = (InstallState) read;

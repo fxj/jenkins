@@ -1,8 +1,9 @@
 package jenkins.security;
 
-import com.gargoylesoftware.htmlunit.Page;
-import java.net.URL;
 import static org.junit.Assert.assertEquals;
+
+import java.net.URL;
+import org.htmlunit.Page;
 import org.junit.Rule;
 import org.junit.Test;
 import org.jvnet.hudson.test.Issue;
@@ -16,11 +17,11 @@ import org.jvnet.hudson.test.JenkinsRule.WebClient;
 public class Security177Test {
     @Rule
     public JenkinsRule jenkins = new JenkinsRule();
-    
+
     @Test
     public void nosniff() throws Exception {
-        WebClient wc = jenkins.createWebClient();
-        wc.getOptions().setThrowExceptionOnFailingStatusCode(false);
+        WebClient wc = jenkins.createWebClient()
+                .withThrowExceptionOnFailingStatusCode(false);
 
         URL u = jenkins.getURL();
         verifyNoSniff(wc.getPage(new URL(u, "adjuncts/507db12b/nosuch/adjunct.js")));
@@ -31,6 +32,6 @@ public class Security177Test {
 
     private void verifyNoSniff(Page p) {
         String v = p.getWebResponse().getResponseHeaderValue("X-Content-Type-Options");
-        assertEquals(v,"nosniff");
+        assertEquals("nosniff", v);
     }
 }

@@ -4,7 +4,6 @@ import hudson.security.SecurityRealm
 import hudson.markup.MarkupFormatterDescriptor
 import hudson.security.AuthorizationStrategy
 import jenkins.AgentProtocol
-import jenkins.model.GlobalConfiguration
 import hudson.Functions
 import hudson.model.Descriptor
 
@@ -12,38 +11,34 @@ def f=namespace(lib.FormTagLib)
 def l=namespace(lib.LayoutTagLib)
 def st=namespace("jelly:stapler")
 
-l.layout(norefresh:true, permission:app.ADMINISTER, title:my.displayName, cssclass:request.getParameter('decorate')) {
+l.layout(permission:app.SYSTEM_READ, title:my.displayName, cssclass:request.getParameter('decorate'), type:"one-column") {
     l.main_panel {
-        h1 {
-            l.icon(class: 'icon-secure icon-xlg')
-            text(my.displayName)
-        }
+        l.app_bar(title: my.displayName)
+
+        set("readOnlyMode", !app.hasPermission(app.ADMINISTER))
 
         p()
-        div(class:"behavior-loading", _("LOADING"))
-        f.form(method:"post",name:"config",action:"configure") {
-            set("instance",my);
-            set("descriptor", my.descriptor);
+        div(class:"behavior-loading") {
+            l.spinner(text: _("LOADING"))
+        }
+        f.form(method:"post", name:"config", action:"configure", class: "jenkins-form") {
+            set("instance", my)
+            set("descriptor", my.descriptor)
 
-            f.optionalBlock( field:"useSecurity", title:_("Enable security"), checked:app.useSecurity) {
-                f.entry (title:_("Disable remember me"), field: "disableRememberMe") {
-                    f.checkbox()
+            f.section(title:_("Authentication")) {
+                f.entry(help: '/descriptor/hudson.security.GlobalSecurityConfiguration/help/disableRememberMe') {
+                    f.checkbox(title:_("Disable remember me"), field: "disableRememberMe")
                 }
-
-                f.entry(title:_("Access Control")) {
-                    table(style:"width:100%") {
-                        f.descriptorRadioList(title:_("Security Realm"),varName:"realm",         instance:app.securityRealm,         descriptors:h.filterDescriptors(app, SecurityRealm.all()))
-                        f.descriptorRadioList(title:_("Authorization"), varName:"authorization", instance:app.authorizationStrategy, descriptors:h.filterDescriptors(app, AuthorizationStrategy.all()))
-                    }
-                }
+                f.dropdownDescriptorSelector(title: _("Security Realm"), field: 'securityRealm', descriptors: h.filterDescriptors(app, SecurityRealm.all()))
+                f.dropdownDescriptorSelector(title: _("Authorization"), field: 'authorizationStrategy', descriptors: h.filterDescriptors(app, AuthorizationStrategy.all()))
             }
 
             f.section(title: _("Markup Formatter")) {
-                f.dropdownDescriptorSelector(title:_("Markup Formatter"),descriptors: MarkupFormatterDescriptor.all(), field: 'markupFormatter')
+                f.dropdownDescriptorSelector(title:_("Markup Formatter"), descriptors: MarkupFormatterDescriptor.all(), field: 'markupFormatter')
             }
 
             f.section(title: _("Agents")) {
-                f.entry(title: _("TCP port for JNLP agents"), field: "slaveAgentPort") {
+                f.entry(title: _("TCP port for inbound agents"), field: "slaveAgentPort") {
                     if (my.slaveAgentPortEnforced) {
                         if (my.slaveAgentPort == -1) {
                             text(_("slaveAgentPortEnforcedDisabled"))
@@ -57,28 +52,26 @@ l.layout(norefresh:true, permission:app.ADMINISTER, title:my.displayName, csscla
                     }
                 }
                 f.advanced(title: _("Agent protocols"), align:"left") {
-                    f.entry(title: _("Agent protocols")) {
-                        def agentProtocols = my.agentProtocols;
-                        table(width:"100%") {
+                    f.entry(title: _("Agent protocols"), help: '/descriptor/hudson.security.GlobalSecurityConfiguration/help/agentProtocol') {
+                        def agentProtocols = my.agentProtocols
+                        div() {
                             for (AgentProtocol p : AgentProtocol.all()) {
                                 if (p.name != null && !p.required) {
                                     f.block() {
                                         f.checkbox(name: "agentProtocol",
                                                 title: p.displayName,
                                                 checked: agentProtocols.contains(p.name),
-                                                json: p.name);
+                                                json: p.name)
                                     }
-                                    tr() {
-                                        td(colspan:"2");
-                                        td(class:"setting-description"){
-                                            st.include(from:p, page: "description", optional:true);
+                                    div(class: "tr") {
+                                        div(class:"setting-description"){
+                                            st.include(from:p, page: "description", optional:true)
                                             if (p.deprecated) {
                                               br()
                                               text(b(_("Deprecated. ")))
-                                              st.include(from:p, page: "deprecationCause", optional:true);
+                                              st.include(from:p, page: "deprecationCause", optional:true)
                                             }
                                         }
-                                        td();
                                     }
                                 }
                             }
@@ -87,21 +80,25 @@ l.layout(norefresh:true, permission:app.ADMINISTER, title:my.displayName, csscla
                 }
             }
 
-            Functions.getSortedDescriptorsForGlobalConfig(my.FILTER).each { Descriptor descriptor ->
-                set("descriptor",descriptor)
-                set("instance",descriptor)
+            Functions.getSortedDescriptorsForGlobalConfigByDescriptor(my.FILTER).each { Descriptor descriptor ->
+                set("descriptor", descriptor)
+                set("instance", descriptor)
                 f.rowSet(name:descriptor.jsonSafeClassName) {
                     st.include(from:descriptor, page:descriptor.globalConfigPage)
                 }
             }
 
-            f.bottomButtonBar {
-                f.submit(value:_("Save"))
-                f.apply()
+            l.isAdmin() {
+                f.bottomButtonBar {
+                    f.submit(value: _("Save"))
+                    f.apply()
+                }
             }
         }
 
-        st.adjunct(includes: "lib.form.confirm")
+        l.isAdmin() {
+            st.adjunct(includes: "lib.form.confirm")
+        }
     }
 }
 

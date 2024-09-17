@@ -1,9 +1,7 @@
 package jenkins.bugs;
 
-import com.gargoylesoftware.htmlunit.WebClientUtil;
-import com.gargoylesoftware.htmlunit.html.HtmlPage;
-import com.gargoylesoftware.htmlunit.html.HtmlSelect;
-import com.gargoylesoftware.htmlunit.html.HtmlTextInput;
+import static org.junit.Assert.assertEquals;
+
 import hudson.Launcher;
 import hudson.model.AbstractBuild;
 import hudson.model.AbstractProject;
@@ -13,9 +11,12 @@ import hudson.tasks.BuildStepDescriptor;
 import hudson.tasks.Builder;
 import hudson.util.FormValidation;
 import hudson.util.ListBoxModel;
+import jakarta.inject.Inject;
 import java.io.IOException;
-import javax.inject.Inject;
-import static org.junit.Assert.*;
+import org.htmlunit.WebClientUtil;
+import org.htmlunit.html.HtmlPage;
+import org.htmlunit.html.HtmlSelect;
+import org.htmlunit.html.HtmlTextInput;
 import org.junit.Rule;
 import org.junit.Test;
 import org.jvnet.hudson.test.Issue;
@@ -41,7 +42,10 @@ public class Jenkins19124Test {
         JenkinsRule.WebClient wc = j.createWebClient();
         HtmlPage c = wc.getPage(p, "configure");
         HtmlTextInput alpha = c.getElementByName("_.alpha");
-        alpha.setValueAttribute("hello");
+        // the fireEvent is required as setValue's new behavior is not triggering the onChange event anymore
+        alpha.setValue("hello");
+        alpha.fireEvent("change");
+
         WebClientUtil.waitForJSExec(wc);
         assertEquals("hello", d.alpha);
         assertEquals("2", d.bravo);
@@ -58,6 +62,7 @@ public class Jenkins19124Test {
         public String getAlpha() {
             return "alpha";
         }
+
         public String getBravo() {
             return "2";
         }

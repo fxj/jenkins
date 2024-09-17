@@ -21,33 +21,38 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
+
 package hudson.cli;
 
+import edu.umd.cs.findbugs.annotations.CheckForNull;
+import edu.umd.cs.findbugs.annotations.NonNull;
+import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import hudson.AbortException;
 import hudson.Extension;
 import hudson.ExtensionList;
 import hudson.ExtensionPoint;
-import hudson.cli.declarative.CLIMethod;
 import hudson.ExtensionPoint.LegacyInstancesAreScopedToHudson;
 import hudson.Functions;
-import hudson.security.ACL;
-import jenkins.security.SecurityListener;
-import jenkins.util.SystemProperties;
+import hudson.cli.declarative.CLIMethod;
 import hudson.cli.declarative.OptionHandlerExtension;
-import jenkins.model.Jenkins;
-import hudson.remoting.Callable;
 import hudson.remoting.Channel;
-import hudson.remoting.ChannelProperty;
-import hudson.security.CliAuthenticator;
 import hudson.security.SecurityRealm;
-import jenkins.security.MasterToSlaveCallable;
-import org.acegisecurity.AccessDeniedException;
-import org.acegisecurity.Authentication;
-import org.acegisecurity.BadCredentialsException;
-import org.acegisecurity.context.SecurityContext;
-import org.acegisecurity.context.SecurityContextHolder;
-import org.acegisecurity.userdetails.User;
-import org.acegisecurity.userdetails.UserDetails;
+import java.io.BufferedInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.PrintStream;
+import java.io.UncheckedIOException;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Type;
+import java.nio.charset.Charset;
+import java.util.List;
+import java.util.Locale;
+import java.util.UUID;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+import jenkins.model.Jenkins;
+import jenkins.util.SystemProperties;
 import org.apache.commons.discovery.ResourceClassIterator;
 import org.apache.commons.discovery.ResourceNameIterator;
 import org.apache.commons.discovery.resource.ClassLoaders;
@@ -57,26 +62,15 @@ import org.jvnet.hudson.annotation_indexer.Index;
 import org.jvnet.tiger_types.Types;
 import org.kohsuke.accmod.Restricted;
 import org.kohsuke.accmod.restrictions.NoExternalUse;
-import org.kohsuke.args4j.ClassParser;
 import org.kohsuke.args4j.CmdLineException;
 import org.kohsuke.args4j.CmdLineParser;
+import org.kohsuke.args4j.ParserProperties;
 import org.kohsuke.args4j.spi.OptionHandler;
-
-import java.io.BufferedInputStream;
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.PrintStream;
-import java.lang.reflect.Type;
-import java.nio.charset.Charset;
-import java.nio.charset.UnsupportedCharsetException;
-import java.util.List;
-import java.util.Locale;
-import java.util.UUID;
-import java.util.logging.Level;
-import java.util.logging.Logger;
-import javax.annotation.CheckForNull;
-import javax.annotation.Nonnull;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.authentication.BadCredentialsException;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContext;
+import org.springframework.security.core.context.SecurityContextHolder;
 
 /**
  * Base class for Hudson CLI.
@@ -85,7 +79,7 @@ import javax.annotation.Nonnull;
  * <p>
  * The users starts {@linkplain CLI the "CLI agent"} on a remote system, by specifying arguments, like
  * {@code "java -jar jenkins-cli.jar command arg1 arg2 arg3"}. The CLI agent creates
- * a remoting channel with the server, and it sends the entire arguments to the server, along with
+ * a connection to the server, and it sends the entire arguments to the server, along with
  * the remoted stdin/out/err.
  *
  * <p>
@@ -93,7 +87,7 @@ import javax.annotation.Nonnull;
  * calls {@link #main(List, Locale, InputStream, PrintStream, PrintStream)} method.
  *
  * <h2>Note for CLI command implementor</h2>
- * Start with <a href="http://wiki.jenkins-ci.org/display/JENKINS/Writing+CLI+commands">this document</a>
+ * Start with <a href="https://www.jenkins.io/doc/developer/cli/writing-cli-commands/">this document</a>
  * to get the general idea of CLI.
  *
  * <ul>
@@ -108,10 +102,6 @@ import javax.annotation.Nonnull;
  * <li>
  * stdin, stdout, stderr are remoted, so proper buffering is necessary for good user experience.
  *
- * <li>
- * Send {@link Callable} to a CLI agent by using {@link #channel} to get local interaction,
- * such as uploading a file, asking for a password, etc.
- *
  * </ul>
  *
  * @author Kohsuke Kawaguchi
@@ -120,6 +110,16 @@ import javax.annotation.Nonnull;
  */
 @LegacyInstancesAreScopedToHudson
 public abstract class CLICommand implements ExtensionPoint, Cloneable {
+
+    /**
+     * Boolean values to either allow or disallow parsing of @-prefixes.
+     * If a command line value starts with @, it is interpreted as being a file, loaded,
+     * and interpreted as if the file content would have been passed to the command line
+     */
+    @SuppressFBWarnings(value = "MS_SHOULD_BE_FINAL", justification = "Accessible via System Groovy Scripts")
+    @Restricted(NoExternalUse.class)
+    public static boolean ALLOW_AT_SYNTAX = SystemProperties.getBoolean(CLICommand.class.getName() + ".allowAtSyntax");
+
     /**
      * Connected to stdout and stderr of the CLI agent that initiated the session.
      * IOW, if you write to these streams, the person who launched the CLI command
@@ -129,15 +129,15 @@ public abstract class CLICommand implements ExtensionPoint, Cloneable {
      * (In contrast, calling {@code System.out.println(...)} would print out
      * the message to the server log file, which is probably not what you want.
      */
-    public transient PrintStream stdout,stderr;
+    public transient PrintStream stdout, stderr;
 
     /**
-     * Shared text, which is reported back to CLI if an error happens in commands 
+     * Shared text, which is reported back to CLI if an error happens in commands
      * taking lists of parameters.
      * @since 2.26
      */
     static final String CLI_LISTPARAM_SUMMARY_ERROR_TEXT = "Error occurred while performing this command, see previous stderr output.";
-    
+
     /**
      * Connected to stdin of the CLI agent.
      *
@@ -147,17 +147,7 @@ public abstract class CLICommand implements ExtensionPoint, Cloneable {
     public transient InputStream stdin;
 
     /**
-     * {@link Channel} that represents the CLI JVM. You can use this to
-     * execute {@link Callable} on the CLI JVM, among other things.
-     *
-     * <p>
-     * Starting 1.445, CLI transports are not required to provide a channel
-     * (think of sshd, telnet, etc), so in such a case this field is null.
-     * 
-     * <p>
-     * See {@link #checkChannel()} to get a channel and throw an user-friendly
-     * exception
-     * @deprecated Specific to Remoting-based protocol.
+     * @deprecated No longer used.
      */
     @Deprecated
     public transient Channel channel;
@@ -174,8 +164,7 @@ public abstract class CLICommand implements ExtensionPoint, Cloneable {
 
     /**
      * Set by the caller of the CLI system if the transport already provides
-     * authentication. Due to the compatibility issue, we still allow the user
-     * to use command line switches to authenticate as other users.
+     * authentication.
      */
     private transient Authentication transportAuth;
 
@@ -193,13 +182,13 @@ public abstract class CLICommand implements ExtensionPoint, Cloneable {
     public String getName() {
         String name = getClass().getName();
         name = name.substring(name.lastIndexOf('.') + 1); // short name
-        name = name.substring(name.lastIndexOf('$')+1);
-        if(name.endsWith("Command"))
-            name = name.substring(0,name.length()-7); // trim off the command
+        name = name.substring(name.lastIndexOf('$') + 1);
+        if (name.endsWith("Command"))
+            name = name.substring(0, name.length() - 7); // trim off the command
 
         // convert "FooBarZot" into "foo-bar-zot"
         // Locale is fixed so that "CreateInstance" always become "create-instance" no matter where this is run.
-        return name.replaceAll("([a-z0-9])([A-Z])","$1-$2").toLowerCase(Locale.ENGLISH);
+        return name.replaceAll("([a-z0-9])([A-Z])", "$1-$2").toLowerCase(Locale.ENGLISH);
     }
 
     /**
@@ -210,12 +199,12 @@ public abstract class CLICommand implements ExtensionPoint, Cloneable {
 
     /**
      * Entry point to the CLI command.
-     * 
+     *
      * <p>
      * The default implementation uses args4j to parse command line arguments and call {@link #run()},
      * but if that processing is undesirable, subtypes can directly override this method and leave {@link #run()}
      * to an empty method.
-     * You would however then have to consider {@link CliAuthenticator} and {@link #getTransportAuthentication},
+     * You would however then have to consider {@link #getTransportAuthentication2},
      * so this is not really recommended.
      *
      * @param args
@@ -232,21 +221,20 @@ public abstract class CLICommand implements ExtensionPoint, Cloneable {
      *      Connected to the stderr of the CLI client.
      * @return
      *      Exit code from the CLI command execution
-     *
-     *      <p>
-     *      Jenkins standard exit codes from CLI:
-     *      0 means everything went well.
-     *      1 means further unspecified exception is thrown while performing the command.
-     *      2 means CmdLineException is thrown while performing the command.
-     *      3 means IllegalArgumentException is thrown while performing the command.
-     *      4 mean IllegalStateException is thrown while performing the command.
-     *      5 means AbortException is thrown while performing the command.
-     *      6 means AccessDeniedException is thrown while performing the command.
-     *      7 means BadCredentialsException is thrown while performing the command.
-     *      8-15 are reserved for future usage
-     *      16+ mean a custom CLI exit error code (meaning defined by the CLI command itself)
-     *
-     *      <p>
+     *      <table>
+     *      <caption>Jenkins standard exit codes from CLI</caption>
+     *      <tr><th>Code</th><th>Definition</th></tr>
+     *      <tr><td>0</td><td>everything went well.</td></tr>
+     *      <tr><td>1</td><td>further unspecified exception is thrown while performing the command.</td></tr>
+     *      <tr><td>2</td><td>{@link CmdLineException} is thrown while performing the command.</td></tr>
+     *      <tr><td>3</td><td>{@link IllegalArgumentException} is thrown while performing the command.</td></tr>
+     *      <tr><td>4</td><td>{@link IllegalStateException} is thrown while performing the command.</td></tr>
+     *      <tr><td>5</td><td>{@link AbortException} is thrown while performing the command.</td></tr>
+     *      <tr><td>6</td><td>{@link AccessDeniedException} is thrown while performing the command.</td></tr>
+     *      <tr><td>7</td><td>{@link BadCredentialsException} is thrown while performing the command.</td></tr>
+     *      <tr><td>8-15</td><td>are reserved for future usage.</td></tr>
+     *      <tr><td>16+</td><td>a custom CLI exit error code (meaning defined by the CLI command itself)</td></tr>
+     *      </table>
      *      Note: For details - see JENKINS-32273
      */
     public int main(List<String> args, Locale locale, InputStream stdin, PrintStream stdout, PrintStream stderr) {
@@ -260,24 +248,17 @@ public abstract class CLICommand implements ExtensionPoint, Cloneable {
         // add options from the authenticator
         SecurityContext sc = null;
         Authentication old = null;
-        Authentication auth = null;
+        Authentication auth;
         try {
+            // TODO as in CLIRegisterer this may be doing too much work
             sc = SecurityContextHolder.getContext();
             old = sc.getAuthentication();
 
-            CliAuthenticator authenticator = Jenkins.getActiveInstance().getSecurityRealm().createCliAuthenticator(this);
-            sc.setAuthentication(getTransportAuthentication());
-            new ClassParser().parse(authenticator,p);
+            sc.setAuthentication(auth = getTransportAuthentication2());
 
-            if (!(this instanceof LoginCommand || this instanceof LogoutCommand || this instanceof HelpCommand || this instanceof WhoAmICommand))
-                Jenkins.getActiveInstance().checkPermission(Jenkins.READ);
-            p.parseArgument(args.toArray(new String[args.size()]));
-            auth = authenticator.authenticate();
-            if (auth==Jenkins.ANONYMOUS)
-                auth = loadStoredAuthentication();
-            sc.setAuthentication(auth); // run the CLI with the right credential
-            if (!(this instanceof LoginCommand || this instanceof LogoutCommand || this instanceof HelpCommand || this instanceof WhoAmICommand))
-                Jenkins.getActiveInstance().checkPermission(Jenkins.READ);
+            if (!(this instanceof HelpCommand || this instanceof WhoAmICommand))
+                Jenkins.get().checkPermission(Jenkins.READ);
+            p.parseArgument(args.toArray(new String[0]));
             LOGGER.log(Level.FINE, "Invoking CLI command {0}, with {1} arguments, as user {2}.",
                     new Object[] {getName(), args.size(), auth.getName()});
             int res = run();
@@ -285,57 +266,51 @@ public abstract class CLICommand implements ExtensionPoint, Cloneable {
                     new Object[] {getName(), args.size(), auth.getName(), res});
             return res;
         } catch (CmdLineException e) {
-            LOGGER.log(Level.FINE, String.format("Failed call to CLI command %s, with %d arguments, as user %s.",
-                    getName(), args.size(), auth != null ? auth.getName() : "<unknown>"), e);
-            stderr.println("");
-            stderr.println("ERROR: " + e.getMessage());
+            logFailedCommandAndPrintExceptionErrorMessage(args, e);
             printUsage(stderr, p);
             return 2;
         } catch (IllegalStateException e) {
-            LOGGER.log(Level.FINE, String.format("Failed call to CLI command %s, with %d arguments, as user %s.",
-                    getName(), args.size(), auth != null ? auth.getName() : "<unknown>"), e);
-            stderr.println("");
-            stderr.println("ERROR: " + e.getMessage());
+            logFailedCommandAndPrintExceptionErrorMessage(args, e);
             return 4;
         } catch (IllegalArgumentException e) {
-            LOGGER.log(Level.FINE, String.format("Failed call to CLI command %s, with %d arguments, as user %s.",
-                    getName(), args.size(), auth != null ? auth.getName() : "<unknown>"), e);
-            stderr.println("");
-            stderr.println("ERROR: " + e.getMessage());
+            logFailedCommandAndPrintExceptionErrorMessage(args, e);
             return 3;
         } catch (AbortException e) {
-            LOGGER.log(Level.FINE, String.format("Failed call to CLI command %s, with %d arguments, as user %s.",
-                    getName(), args.size(), auth != null ? auth.getName() : "<unknown>"), e);
-            // signals an error without stack trace
-            stderr.println("");
-            stderr.println("ERROR: " + e.getMessage());
+            logFailedCommandAndPrintExceptionErrorMessage(args, e);
             return 5;
         } catch (AccessDeniedException e) {
-            LOGGER.log(Level.FINE, String.format("Failed call to CLI command %s, with %d arguments, as user %s.",
-                    getName(), args.size(), auth != null ? auth.getName() : "<unknown>"), e);
-            stderr.println("");
-            stderr.println("ERROR: " + e.getMessage());
+            logFailedCommandAndPrintExceptionErrorMessage(args, e);
             return 6;
         } catch (BadCredentialsException e) {
             // to the caller, we can't reveal whether the user didn't exist or the password didn't match.
             // do that to the server log instead
             String id = UUID.randomUUID().toString();
-            LOGGER.log(Level.INFO, "CLI login attempt failed: " + id, e);
-            stderr.println("");
-            stderr.println("ERROR: Bad Credentials. Search the server log for " + id + " for more details.");
+            logAndPrintError(e, "Bad Credentials. Search the server log for " + id + " for more details.",
+                    "CLI login attempt failed: " + id, Level.INFO);
             return 7;
         } catch (Throwable e) {
-            final String errorMsg = String.format("Unexpected exception occurred while performing %s command.",
-                    getName());
-            stderr.println("");
-            stderr.println("ERROR: " + errorMsg);
-            LOGGER.log(Level.WARNING, errorMsg, e);
+            String errorMsg = "Unexpected exception occurred while performing " + getName() + " command.";
+            logAndPrintError(e, errorMsg, errorMsg, Level.WARNING);
             Functions.printStackTrace(e, stderr);
             return 1;
         } finally {
-            if(sc != null)
+            if (sc != null)
                 sc.setAuthentication(old); // restore
         }
+    }
+
+    private void logFailedCommandAndPrintExceptionErrorMessage(List<String> args, Throwable e) {
+        Authentication auth = getTransportAuthentication2();
+        String logMessage = String.format("Failed call to CLI command %s, with %d arguments, as user %s.",
+                getName(), args.size(), auth != null ? auth.getName() : "<unknown>");
+
+        logAndPrintError(e, e.getMessage(), logMessage, Level.FINE);
+    }
+
+    private void logAndPrintError(Throwable e, String errorMessage, String logMessage, Level logLevel) {
+        LOGGER.log(logLevel, logMessage, e);
+        this.stderr.println();
+        this.stderr.println("ERROR: " + errorMessage);
     }
 
     /**
@@ -345,7 +320,8 @@ public abstract class CLICommand implements ExtensionPoint, Cloneable {
      * @since 1.538
      */
     protected CmdLineParser getCmdLineParser() {
-        return new CmdLineParser(this);
+        ParserProperties properties = ParserProperties.defaults().withAtSyntax(ALLOW_AT_SYNTAX);
+        return new CmdLineParser(this, properties);
     }
 
     /**
@@ -353,56 +329,7 @@ public abstract class CLICommand implements ExtensionPoint, Cloneable {
      */
     @Deprecated
     public Channel checkChannel() throws AbortException {
-        if (channel==null)
-            throw new AbortException("This command is requesting the deprecated -remoting mode. See https://jenkins.io/redirect/cli-command-requires-channel");
-        return channel;
-    }
-
-    /**
-     * Loads the persisted authentication information from {@link ClientAuthenticationCache}
-     * if the current transport provides {@link Channel}.
-     * @deprecated Assumes Remoting, and vulnerable to JENKINS-12543.
-     */
-    @Deprecated
-    protected Authentication loadStoredAuthentication() throws InterruptedException {
-        try {
-            if (channel!=null){
-                Authentication authLoadedFromCache = new ClientAuthenticationCache(channel).get();
-
-                if(!ACL.isAnonymous(authLoadedFromCache)){
-                    UserDetails userDetails = new CLIUserDetails(authLoadedFromCache);
-                    SecurityListener.fireAuthenticated(userDetails);
-                }
-
-                return authLoadedFromCache;
-            }
-        } catch (IOException e) {
-            stderr.println("Failed to access the stored credential");
-            Functions.printStackTrace(e, stderr);  // recover
-        }
-        return Jenkins.ANONYMOUS;
-    }
-
-    /**
-     * Determines if the user authentication is attempted through CLI before running this command.
-     *
-     * <p>
-     * If your command doesn't require any authentication whatsoever, and if you don't even want to let the user
-     * authenticate, then override this method to always return false &mdash; doing so will result in all the commands
-     * running as anonymous user credential.
-     *
-     * <p>
-     * Note that even if this method returns true, the user can still skip aut 
-     *
-     * @param auth
-     *      Always non-null.
-     *      If the underlying transport had already performed authentication, this object is something other than
-     *      {@link jenkins.model.Jenkins#ANONYMOUS}.
-     * @deprecated Unused.
-     */
-    @Deprecated
-    protected boolean shouldPerformAuthentication(Authentication auth) {
-        return auth== Jenkins.ANONYMOUS;
+        throw new AbortException("This command is requesting the -remoting mode which is no longer supported. See https://www.jenkins.io/redirect/cli-command-requires-channel");
     }
 
     /**
@@ -419,21 +346,41 @@ public abstract class CLICommand implements ExtensionPoint, Cloneable {
      * then this method can return a valid identity of the client.
      *
      * <p>
-     * If the transport doesn't do authentication, this method returns {@link jenkins.model.Jenkins#ANONYMOUS}.
+     * If the transport doesn't do authentication, this method returns {@link jenkins.model.Jenkins#ANONYMOUS2}.
+     * @since 2.266
      */
-    public Authentication getTransportAuthentication() {
-        Authentication a = transportAuth; 
-        if (a==null)    a = Jenkins.ANONYMOUS;
+    public Authentication getTransportAuthentication2() {
+        Authentication a = transportAuth;
+        if (a == null)    a = Jenkins.ANONYMOUS2;
         return a;
     }
 
-    public void setTransportAuth(Authentication transportAuth) {
+    /**
+     * @deprecated use {@link #getTransportAuthentication2}
+     */
+    @Deprecated
+    public org.acegisecurity.Authentication getTransportAuthentication() {
+        return org.acegisecurity.Authentication.fromSpring(getTransportAuthentication2());
+    }
+
+    /**
+     * @since 2.266
+     */
+    public void setTransportAuth2(Authentication transportAuth) {
         this.transportAuth = transportAuth;
     }
 
     /**
+     * @deprecated use {@link #setTransportAuth2}
+     */
+    @Deprecated
+    public void setTransportAuth(org.acegisecurity.Authentication transportAuth) {
+        setTransportAuth2(transportAuth.toSpring());
+    }
+
+    /**
      * Executes the command, and return the exit code.
-     * 
+     *
      * <p>
      * This is an internal contract between {@link CLICommand} and its subtype.
      * To execute CLI method from outside, use {@link #main(List, Locale, InputStream, PrintStream, PrintStream)}
@@ -473,7 +420,15 @@ public abstract class CLICommand implements ExtensionPoint, Cloneable {
     public final String getSingleLineSummary() {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         getCmdLineParser().printSingleLineUsage(out);
-        return out.toString();
+        Charset charset;
+        try {
+            charset = getClientCharset();
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
+        return out.toString(charset);
     }
 
     /**
@@ -483,7 +438,15 @@ public abstract class CLICommand implements ExtensionPoint, Cloneable {
     public final String getUsage() {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         getCmdLineParser().printUsage(out);
-        return out.toString();
+        Charset charset;
+        try {
+            charset = getClientCharset();
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
+        return out.toString(charset);
     }
 
     /**
@@ -492,17 +455,25 @@ public abstract class CLICommand implements ExtensionPoint, Cloneable {
     @Restricted(NoExternalUse.class)
     public final String getLongDescription() {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
-        PrintStream ps = new PrintStream(out);
+        Charset charset;
+        try {
+            charset = getClientCharset();
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
+        PrintStream ps = new PrintStream(out, false, charset);
 
         printUsageSummary(ps);
         ps.close();
-        return out.toString();
+        return out.toString(charset);
     }
 
     /**
      * Called while producing usage. This is a good method to override
      * to render the general description of the command that goes beyond
-     * a single-line summary. 
+     * a single-line summary.
      */
     protected void printUsageSummary(PrintStream stderr) {
         stderr.println(getShortDescription());
@@ -514,55 +485,25 @@ public abstract class CLICommand implements ExtensionPoint, Cloneable {
      */
     @Deprecated
     protected String getClientSystemProperty(String name) throws IOException, InterruptedException {
-        return checkChannel().call(new GetSystemProperty(name));
-    }
-
-    private static final class GetSystemProperty extends MasterToSlaveCallable<String, IOException> {
-        private final String name;
-
-        private GetSystemProperty(String name) {
-            this.name = name;
-        }
-
-        public String call() throws IOException {
-            return SystemProperties.getString(name);
-        }
-
-        private static final long serialVersionUID = 1L;
+        checkChannel();
+        return null; // never run
     }
 
     /**
      * Define the encoding for the command.
      * @since 2.54
      */
-    public void setClientCharset(@Nonnull Charset encoding) {
+    public void setClientCharset(@NonNull Charset encoding) {
         this.encoding = encoding;
     }
 
-    protected @Nonnull Charset getClientCharset() throws IOException, InterruptedException {
+    protected @NonNull Charset getClientCharset() throws IOException, InterruptedException {
         if (encoding != null) {
             return encoding;
         }
-        if (channel==null)
-            // for SSH, assume the platform default encoding
-            // this is in-line with the standard SSH behavior
-            return Charset.defaultCharset();
-
-        String charsetName = checkChannel().call(new GetCharset());
-        try {
-            return Charset.forName(charsetName);
-        } catch (UnsupportedCharsetException e) {
-            LOGGER.log(Level.FINE,"Server doesn't have charset "+charsetName);
-            return Charset.defaultCharset();
-        }
-    }
-
-    private static final class GetCharset extends MasterToSlaveCallable<String, IOException> {
-        public String call() throws IOException {
-            return Charset.defaultCharset().name();
-        }
-
-        private static final long serialVersionUID = 1L;
+        // for SSH, assume the platform default encoding
+        // this is in-line with the standard SSH behavior
+        return Charset.defaultCharset();
     }
 
     /**
@@ -571,21 +512,8 @@ public abstract class CLICommand implements ExtensionPoint, Cloneable {
      */
     @Deprecated
     protected String getClientEnvironmentVariable(String name) throws IOException, InterruptedException {
-        return checkChannel().call(new GetEnvironmentVariable(name));
-    }
-
-    private static final class GetEnvironmentVariable extends MasterToSlaveCallable<String, IOException> {
-        private final String name;
-
-        private GetEnvironmentVariable(String name) {
-            this.name = name;
-        }
-
-        public String call() throws IOException {
-            return System.getenv(name);
-        }
-
-        private static final long serialVersionUID = 1L;
+        checkChannel();
+        return null; // never run
     }
 
     /**
@@ -593,9 +521,9 @@ public abstract class CLICommand implements ExtensionPoint, Cloneable {
      */
     protected CLICommand createClone() {
         try {
-            return getClass().newInstance();
-        } catch (IllegalAccessException | InstantiationException e) {
-            throw new AssertionError(e);
+            return getClass().getDeclaredConstructor().newInstance();
+        } catch (NoSuchMethodException | InstantiationException | IllegalAccessException | InvocationTargetException e) {
+            throw new LinkageError(e.getMessage(), e);
         }
     }
 
@@ -604,9 +532,9 @@ public abstract class CLICommand implements ExtensionPoint, Cloneable {
      */
     protected void registerOptionHandlers() {
         try {
-            for (Class c : Index.list(OptionHandlerExtension.class, Jenkins.getActiveInstance().pluginManager.uberClassLoader,Class.class)) {
+            for (Class c : Index.list(OptionHandlerExtension.class, Jenkins.get().pluginManager.uberClassLoader, Class.class)) {
                 Type t = Types.getBaseClass(c, OptionHandler.class);
-                CmdLineParser.registerHandler(Types.erasure(Types.getTypeArgument(t,0)), c);
+                CmdLineParser.registerHandler(Types.erasure(Types.getTypeArgument(t, 0)), c);
             }
         } catch (IOException e) {
             throw new Error(e);
@@ -625,20 +553,14 @@ public abstract class CLICommand implements ExtensionPoint, Cloneable {
      */
     public static CLICommand clone(String name) {
         for (CLICommand cmd : all())
-            if(name.equals(cmd.getName()))
+            if (name.equals(cmd.getName()))
                 return cmd.createClone();
         return null;
     }
 
     private static final Logger LOGGER = Logger.getLogger(CLICommand.class.getName());
 
-    /**
-     * Key for {@link Channel#getProperty(Object)} that links to the {@link Authentication} object
-     * which captures the identity of the client given by the transport layer.
-     */
-    public static final ChannelProperty<Authentication> TRANSPORT_AUTHENTICATION = new ChannelProperty<Authentication>(Authentication.class,"transportAuthentication");
-
-    private static final ThreadLocal<CLICommand> CURRENT_COMMAND = new ThreadLocal<CLICommand>();
+    private static final ThreadLocal<CLICommand> CURRENT_COMMAND = new ThreadLocal<>();
 
     /*package*/ static CLICommand setCurrent(CLICommand cmd) {
         CLICommand old = getCurrent();
@@ -656,8 +578,8 @@ public abstract class CLICommand implements ExtensionPoint, Cloneable {
     static {
         // register option handlers that are defined
         ClassLoaders cls = new ClassLoaders();
-        Jenkins j = Jenkins.getActiveInstance();
-        if (j!=null) {// only when running on the master
+        Jenkins j = Jenkins.getInstanceOrNull();
+        if (j != null) { // only when running on the controller
             cls.put(j.getPluginManager().uberClassLoader);
 
             ResourceNameIterator servicesIter =
@@ -665,23 +587,12 @@ public abstract class CLICommand implements ExtensionPoint, Cloneable {
             final ResourceClassIterator itr =
                 new DiscoverClasses(cls).findResourceClasses(servicesIter);
 
-            while(itr.hasNext()) {
+            while (itr.hasNext()) {
                 Class h = itr.nextResourceClass().loadClass();
                 Class c = Types.erasure(Types.getTypeArgument(Types.getBaseClass(h, OptionHandler.class), 0));
-                CmdLineParser.registerHandler(c,h);
+                CmdLineParser.registerHandler(c, h);
             }
         }
     }
 
-    /**
-     * User details loaded from the CLI {@link ClientAuthenticationCache}
-     * The user is never anonymous since it must be authenticated to be stored in the cache
-     */
-    @Deprecated
-    @Restricted(NoExternalUse.class)
-    private static class CLIUserDetails extends User {
-        private CLIUserDetails(Authentication auth) {
-            super(auth.getName(), "", true, true, true, true, auth.getAuthorities());
-        }
-    }
 }

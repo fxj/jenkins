@@ -24,15 +24,19 @@
 
 package jenkins.model.lazy;
 
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotSame;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
+
 import hudson.model.FreeStyleBuild;
 import hudson.model.FreeStyleProject;
 import hudson.model.listeners.RunListener;
-import static org.junit.Assert.*;
 import org.junit.Rule;
 import org.junit.Test;
 import org.jvnet.hudson.test.Issue;
-import org.jvnet.hudson.test.Issue;
 import org.jvnet.hudson.test.JenkinsRule;
+import org.jvnet.hudson.test.RunLoadCounter;
 import org.jvnet.hudson.test.SleepBuilder;
 
 public class LazyBuildMixInTest {
@@ -49,8 +53,8 @@ public class LazyBuildMixInTest {
         FreeStyleBuild b3 = r.buildAndAssertSuccess(p);
         assertEquals(b2, b1.getNextBuild());
         assertEquals(b3, b2.getNextBuild());
-        assertEquals(null, b3.getNextBuild());
-        assertEquals(null, b1.getPreviousBuild());
+        assertNull(b3.getNextBuild());
+        assertNull(b1.getPreviousBuild());
         assertEquals(b1, b2.getPreviousBuild());
         assertEquals(b2, b3.getPreviousBuild());
         b1.getRunMixIn().createReference().clear();
@@ -71,8 +75,8 @@ public class LazyBuildMixInTest {
         FreeStyleBuild b3 = r.buildAndAssertSuccess(p);
         assertEquals(b2, b1.getNextBuild());
         assertEquals(b3, b2.getNextBuild());
-        assertEquals(null, b3.getNextBuild());
-        assertEquals(null, b1.getPreviousBuild());
+        assertNull(b3.getNextBuild());
+        assertNull(b1.getPreviousBuild());
         assertEquals(b1, b2.getPreviousBuild());
         assertEquals(b2, b3.getPreviousBuild());
         b2.delete();
@@ -87,9 +91,25 @@ public class LazyBuildMixInTest {
     @Test public void newRunningBuildRelationFromPrevious() throws Exception {
         FreeStyleProject p = r.createFreeStyleProject();
         p.getBuildersList().add(new SleepBuilder(1000));
-        FreeStyleBuild b1 = p.scheduleBuild2(0).get();
+        FreeStyleBuild b1 = r.buildAndAssertSuccess(p);
         assertNull(b1.getNextBuild());
         FreeStyleBuild b2 = p.scheduleBuild2(0).waitForStart();
         assertSame(b2, b1.getNextBuild());
+        r.assertBuildStatusSuccess(r.waitForCompletion(b2));
     }
+
+    @Test
+    public void newBuildsShouldNotLoadOld() throws Throwable {
+        var p = r.createFreeStyleProject("p");
+        for (int i = 0; i < 10; i++) {
+            r.buildAndAssertSuccess(p);
+        }
+        RunLoadCounter.assertMaxLoads(p, /* just lastBuild */ 1, () -> {
+            for (int i = 0; i < 5; i++) {
+                r.buildAndAssertSuccess(p);
+            }
+            return null;
+        });
+    }
+
 }

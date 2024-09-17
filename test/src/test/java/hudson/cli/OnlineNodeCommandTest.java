@@ -22,33 +22,7 @@
  * THE SOFTWARE.
  */
 
-/**
- * @author pjanouse
- */
-
 package hudson.cli;
-
-import hudson.Launcher;
-import hudson.model.AbstractBuild;
-import hudson.model.BuildListener;
-import hudson.model.Computer;
-import hudson.model.Descriptor;
-import hudson.model.FreeStyleBuild;
-import hudson.model.FreeStyleProject;
-import hudson.model.Node;
-import hudson.remoting.VirtualChannel;
-import hudson.slaves.DumbSlave;
-import hudson.tasks.Builder;
-import hudson.util.OneShotEvent;
-import jenkins.model.Jenkins;
-import org.junit.Before;
-import org.junit.Rule;
-import org.junit.Test;
-import org.jvnet.hudson.test.JenkinsRule;
-import org.jvnet.hudson.test.TestExtension;
-
-import java.io.IOException;
-import java.util.concurrent.Future;
 
 import static hudson.cli.CLICommandInvoker.Matcher.failedWith;
 import static hudson.cli.CLICommandInvoker.Matcher.hasNoStandardOutput;
@@ -56,12 +30,38 @@ import static hudson.cli.CLICommandInvoker.Matcher.succeededSilently;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.equalTo;
-import static org.hamcrest.Matchers.hasSize;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
+import hudson.Launcher;
+import hudson.model.AbstractBuild;
+import hudson.model.BuildListener;
+import hudson.model.Computer;
+import hudson.model.FreeStyleBuild;
+import hudson.model.FreeStyleProject;
+import hudson.model.Node;
+import hudson.remoting.VirtualChannel;
+import hudson.slaves.DumbSlave;
+import hudson.util.OneShotEvent;
+import java.io.IOException;
+import jenkins.model.Jenkins;
+import org.junit.Before;
+import org.junit.ClassRule;
+import org.junit.Rule;
+import org.junit.Test;
+import org.jvnet.hudson.test.BuildWatcher;
+import org.jvnet.hudson.test.JenkinsRule;
+import org.jvnet.hudson.test.TestBuilder;
+
+/**
+ * @author pjanouse
+ */
 public class OnlineNodeCommandTest {
 
     private CLICommandInvoker command;
+
+    @ClassRule
+    public static final BuildWatcher buildWatcher = new BuildWatcher();
 
     @Rule public final JenkinsRule j = new JenkinsRule();
 
@@ -80,7 +80,7 @@ public class OnlineNodeCommandTest {
         assertThat(result.stderr(), containsString("ERROR: user is missing the Agent/Connect permission"));
     }
 
-    @Test public void onlineNodeShouldFailIfNodeDoesNotExist() throws Exception {
+    @Test public void onlineNodeShouldFailIfNodeDoesNotExist() {
         final CLICommandInvoker.Result result = command
                 .authorizedTo(Computer.CONNECT, Jenkins.READ)
                 .invokeWithArgs("never_created");
@@ -191,8 +191,7 @@ public class OnlineNodeCommandTest {
         }
         FreeStyleProject project = j.createFreeStyleProject("aProject");
         project.setAssignedNode(slave);
-        final Future<FreeStyleBuild> build = startBlockingAndFinishingBuild(project, finish);
-        assertThat(((FreeStyleProject) j.jenkins.getItem("aProject")).getBuilds(), hasSize(1));
+        final FreeStyleBuild build = startBlockingAndFinishingBuild(project, finish);
 
         slave.toComputer().setTemporarilyOffline(true);
         slave.toComputer().waitUntilOffline();
@@ -207,13 +206,11 @@ public class OnlineNodeCommandTest {
             slave.toComputer().waitUntilOnline();
         }
         assertThat(slave.toComputer().isOnline(), equalTo(true));
-        assertThat(((FreeStyleProject) j.jenkins.getItem("aProject")).getBuilds(), hasSize(1));
-        assertThat(project.isBuilding(), equalTo(true));
+        assertThat(build.isBuilding(), equalTo(true));
 
         finish.signal();
-        build.get();
-        assertThat(((FreeStyleProject) j.jenkins.getItem("aProject")).getBuilds(), hasSize(1));
-        assertThat(project.isBuilding(), equalTo(false));
+        j.waitForCompletion(build);
+        assertThat(build.isBuilding(), equalTo(false));
         j.assertBuildStatusSuccess(build);
     }
 
@@ -286,8 +283,8 @@ public class OnlineNodeCommandTest {
         assertThat(slave2.toComputer().isOnline(), equalTo(true));
     }
 
-    @Test public void onlineNodeShouldSucceedOnMaster() throws Exception {
-        final Computer masterComputer = j.jenkins.getActiveInstance().getComputer("");
+    @Test public void onlineNodeShouldSucceedOnMaster() {
+        final Computer masterComputer = j.jenkins.getComputer("");
 
         CLICommandInvoker.Result result = command
                 .authorizedTo(Computer.CONNECT, Jenkins.READ)
@@ -307,22 +304,24 @@ public class OnlineNodeCommandTest {
      *
      * @param project {@link FreeStyleProject} to start
      * @param finish {@link OneShotEvent} to signal to finish a build
-     * @return A {@link Future} object represents the started build
+     * @return the started build (the caller should wait for its completion)
      * @throws Exception if somethink wrong happened
      */
-    public static Future<FreeStyleBuild> startBlockingAndFinishingBuild(FreeStyleProject project, OneShotEvent finish) throws Exception {
+    public static FreeStyleBuild startBlockingAndFinishingBuild(FreeStyleProject project, OneShotEvent finish) throws Exception {
+        assertFalse(finish.isSignaled());
+
         final OneShotEvent block = new OneShotEvent();
 
         project.getBuildersList().add(new BlockingAndFinishingBuilder(block, finish));
 
-        Future<FreeStyleBuild> r = project.scheduleBuild2(0);
+        FreeStyleBuild b = project.scheduleBuild2(0).waitForStart();
         block.block();  // wait until we are safe to interrupt
-        assertTrue(project.getLastBuild().isBuilding());
+        assertTrue(b.isBuilding());
 
-        return r;
+        return b;
     }
 
-    private static final class BlockingAndFinishingBuilder extends Builder {
+    private static final class BlockingAndFinishingBuilder extends TestBuilder {
         private final OneShotEvent block;
         private final OneShotEvent finish;
 
@@ -337,18 +336,12 @@ public class OnlineNodeCommandTest {
             Node node = build.getBuiltOn();
 
             block.signal(); // we are safe to be interrupted
-            for (;;) {
-                // Go out if we should finish
-                if (finish.isSignaled())
-                    break;
-
+            while (!finish.isSignaled()) {
                 // Keep using the channel
                 channel.call(node.getClockDifferenceCallable());
                 Thread.sleep(100);
             }
             return true;
         }
-        @TestExtension("disconnectCause")
-        public static class DescriptorImpl extends Descriptor<Builder> {}
     }
 }

@@ -21,11 +21,11 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
+
 package hudson.cli.handlers;
 
 import hudson.model.Node;
 import jenkins.model.Jenkins;
-
 import org.kohsuke.MetaInfServices;
 import org.kohsuke.args4j.CmdLineException;
 import org.kohsuke.args4j.CmdLineParser;
@@ -53,7 +53,7 @@ public class NodeOptionHandler extends OptionHandler<Node> {
 
         String nodeName = params.getParameter(0);
 
-        final Node node = Jenkins.getInstance().getNode(nodeName);
+        final Node node = Jenkins.get().getNode(nodeName);
         if (node == null) throw new IllegalArgumentException("No such node '" + nodeName + "'");
 
         setter.addValue(node);

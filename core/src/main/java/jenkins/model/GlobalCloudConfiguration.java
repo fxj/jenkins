@@ -1,30 +1,39 @@
 package jenkins.model;
 
+import edu.umd.cs.findbugs.annotations.CheckForNull;
 import hudson.Extension;
-import hudson.slaves.Cloud;
-import net.sf.json.JSONObject;
+import hudson.RestrictedSince;
+import hudson.model.RootAction;
 import org.jenkinsci.Symbol;
-import org.kohsuke.stapler.StaplerRequest;
-
-import java.io.IOException;
+import org.kohsuke.accmod.Restricted;
+import org.kohsuke.accmod.restrictions.NoExternalUse;
 
 /**
- * Adds the {@link Cloud} configuration to the system config page.
- *
- * <p>
- * This object just acts as a proxy to configure {@link Jenkins#clouds}
- *
- * @author Kohsuke Kawaguchi
+ * Redirects from /configureClouds to /cloud/.
+ * Previously was the form for clouds.
+ * @deprecated Replaced by {@link jenkins.agents.CloudsLink} and {@link jenkins.agents.CloudSet}.
  */
-@Extension(ordinal=-100) @Symbol("cloud") // historically this was placed at the very end of the configuration page
-public class GlobalCloudConfiguration  extends GlobalConfiguration {
+@Extension
+@Symbol("cloud")
+@Restricted(NoExternalUse.class)
+@RestrictedSince("2.205")
+@Deprecated
+public class GlobalCloudConfiguration implements RootAction {
+
+    @CheckForNull
     @Override
-    public boolean configure(StaplerRequest req, JSONObject json) throws FormException {
-        try {
-            Jenkins.get().clouds.rebuildHetero(req,json, Cloud.all(), "cloud");
-            return true;
-        } catch (IOException e) {
-            throw new FormException(e,"clouds");
-        }
+    public String getIconFileName() {
+        return null;
+    }
+
+    @CheckForNull
+    @Override
+    public String getDisplayName() {
+        return Messages.GlobalCloudConfiguration_DisplayName();
+    }
+
+    @Override
+    public String getUrlName() {
+        return "configureClouds";
     }
 }

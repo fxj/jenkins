@@ -1,18 +1,18 @@
 /*
  * The MIT License
- * 
+ *
  * Copyright (c) 2004-2009, Sun Microsystems, Inc., Kohsuke Kawaguchi
- * 
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
  * in the Software without restriction, including without limitation the rights
  * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
  * copies of the Software, and to permit persons to whom the Software is
  * furnished to do so, subject to the following conditions:
- * 
+ *
  * The above copyright notice and this permission notice shall be included in
  * all copies or substantial portions of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
  * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
@@ -21,17 +21,20 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
+
 package hudson.util;
 
-import jenkins.util.SystemProperties;
-
-import javax.annotation.Nonnull;
-import javax.annotation.Nullable;
+import edu.umd.cs.findbugs.annotations.NonNull;
+import edu.umd.cs.findbugs.annotations.Nullable;
+import hudson.Functions;
 import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.io.Writer;
+import java.lang.ref.Cleaner;
+import java.nio.channels.FileChannel;
 import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
@@ -40,6 +43,7 @@ import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import jenkins.util.SystemProperties;
 
 /**
  * Buffered {@link FileWriter} that supports atomic operations.
@@ -54,8 +58,14 @@ public class AtomicFileWriter extends Writer {
 
     private static final Logger LOGGER = Logger.getLogger(AtomicFileWriter.class.getName());
 
+    private static final Cleaner CLEANER = Cleaner.create(
+            new NamingThreadFactory(new DaemonThreadFactory(), AtomicFileWriter.class.getName() + ".cleaner"));
+
     private static /* final */ boolean DISABLE_FORCED_FLUSH = SystemProperties.getBoolean(
             AtomicFileWriter.class.getName() + ".DISABLE_FORCED_FLUSH");
+
+    private static /* final */ boolean REQUIRES_DIR_FSYNC = SystemProperties.getBoolean(
+            AtomicFileWriter.class.getName() + ".REQUIRES_DIR_FSYNC", !Functions.isWindows());
 
     static {
         if (DISABLE_FORCED_FLUSH) {
@@ -63,7 +73,7 @@ public class AtomicFileWriter extends Writer {
         }
     }
 
-    private final Writer core;
+    private final FileChannelWriter core;
     private final Path tmpPath;
     private final Path destPath;
 
@@ -71,7 +81,7 @@ public class AtomicFileWriter extends Writer {
      * Writes with UTF-8 encoding.
      */
     public AtomicFileWriter(File f) throws IOException {
-        this(f,"UTF-8");
+        this(toPath(f), StandardCharsets.UTF_8);
     }
 
     /**
@@ -80,7 +90,7 @@ public class AtomicFileWriter extends Writer {
      * @deprecated Use {@link #AtomicFileWriter(Path, Charset)}
      */
     @Deprecated
-    public AtomicFileWriter(@Nonnull File f, @Nullable String encoding) throws IOException {
+    public AtomicFileWriter(@NonNull File f, @Nullable String encoding) throws IOException {
         this(toPath(f), encoding == null ? Charset.defaultCharset() : Charset.forName(encoding));
     }
 
@@ -88,11 +98,11 @@ public class AtomicFileWriter extends Writer {
      * Wraps potential {@link java.nio.file.InvalidPathException} thrown by {@link File#toPath()} in an
      * {@link IOException} for backward compatibility.
      *
-     * @param file
+     * @param file file to obtain the path of
      * @return the path for that file
      * @see File#toPath()
      */
-    private static Path toPath(@Nonnull File file) throws IOException {
+    private static Path toPath(@NonNull File file) throws IOException {
         try {
             return file.toPath();
         } catch (InvalidPathException e) {
@@ -104,7 +114,7 @@ public class AtomicFileWriter extends Writer {
      * @param destinationPath the destination path where to write the content when committed.
      * @param charset File charset to write.
      */
-    public AtomicFileWriter(@Nonnull Path destinationPath, @Nonnull Charset charset) throws IOException {
+    public AtomicFileWriter(@NonNull Path destinationPath, @NonNull Charset charset) throws IOException {
         // See FileChannelWriter docs to understand why we do not cause a force() call on flush() from AtomicFileWriter.
         this(destinationPath, charset, false, true);
     }
@@ -119,7 +129,7 @@ public class AtomicFileWriter extends Writer {
      * @deprecated use {@link AtomicFileWriter#AtomicFileWriter(Path, Charset)}
      */
     @Deprecated
-    public AtomicFileWriter(@Nonnull Path destinationPath, @Nonnull Charset charset, boolean integrityOnFlush, boolean integrityOnClose) throws IOException {
+    public AtomicFileWriter(@NonNull Path destinationPath, @NonNull Charset charset, boolean integrityOnFlush, boolean integrityOnClose) throws IOException {
         if (charset == null) { // be extra-defensive if people don't care
             throw new IllegalArgumentException("charset is null");
         }
@@ -141,7 +151,7 @@ public class AtomicFileWriter extends Writer {
             // JENKINS-48407: NIO's createTempFile creates file with 0600 permissions, so we use pre-NIO for this...
             tmpPath = File.createTempFile("atomic", "tmp", dir.toFile()).toPath();
         } catch (IOException e) {
-            throw new IOException("Failed to create a temporary file in "+ dir,e);
+            throw new IOException("Failed to create a temporary file in " + dir, e);
         }
 
         if (DISABLE_FORCED_FLUSH) {
@@ -149,7 +159,9 @@ public class AtomicFileWriter extends Writer {
             integrityOnClose = false;
         }
 
-        core = new FileChannelWriter(tmpPath, charset, integrityOnFlush, integrityOnClose, StandardOpenOption.WRITE);
+        core = new FileChannelWriter(tmpPath, charset, integrityOnFlush, integrityOnClose, StandardOpenOption.WRITE, StandardOpenOption.CREATE);
+
+        CLEANER.register(this, new CleanupChecker(core, tmpPath, destPath));
     }
 
     @Override
@@ -159,17 +171,20 @@ public class AtomicFileWriter extends Writer {
 
     @Override
     public void write(String str, int off, int len) throws IOException {
-        core.write(str,off,len);
+        core.write(str, off, len);
     }
 
-    public void write(char cbuf[], int off, int len) throws IOException {
-        core.write(cbuf,off,len);
+    @Override
+    public void write(char[] cbuf, int off, int len) throws IOException {
+        core.write(cbuf, off, len);
     }
 
+    @Override
     public void flush() throws IOException {
         core.flush();
     }
 
+    @Override
     public void close() throws IOException {
         core.close();
     }
@@ -181,7 +196,12 @@ public class AtomicFileWriter extends Writer {
      * the {@link #commit()} is called, to simplify coding.
      */
     public void abort() throws IOException {
-        closeAndDeleteTempFile();
+        // One way or another, the temporary file should be deleted.
+        try {
+            close();
+        } finally {
+            Files.deleteIfExists(tmpPath);
+        }
     }
 
     public void commit() throws IOException {
@@ -189,13 +209,13 @@ public class AtomicFileWriter extends Writer {
         try {
             // Try to make an atomic move.
             Files.move(tmpPath, destPath, StandardCopyOption.ATOMIC_MOVE);
-        } catch (IOException e) {
+        } catch (IOException moveFailed) {
             // If it falls here that can mean many things. Either that the atomic move is not supported,
             // or something wrong happened. Anyway, let's try to be over-diagnosing
-            if (e instanceof AtomicMoveNotSupportedException) {
-                LOGGER.log(Level.WARNING, "Atomic move not supported. falling back to non-atomic move.", e);
+            if (moveFailed instanceof AtomicMoveNotSupportedException) {
+                LOGGER.log(Level.WARNING, "Atomic move not supported. falling back to non-atomic move.", moveFailed);
             } else {
-                LOGGER.log(Level.WARNING, "Unable to move atomically, falling back to non-atomic move.", e);
+                LOGGER.log(Level.WARNING, "Unable to move atomically, falling back to non-atomic move.", moveFailed);
             }
 
             if (destPath.toFile().exists()) {
@@ -204,34 +224,61 @@ public class AtomicFileWriter extends Writer {
 
             try {
                 Files.move(tmpPath, destPath, StandardCopyOption.REPLACE_EXISTING);
-            } catch (IOException e1) {
-                e1.addSuppressed(e);
+            } catch (IOException replaceFailed) {
+                replaceFailed.addSuppressed(moveFailed);
                 LOGGER.log(Level.WARNING, "Unable to move {0} to {1}. Attempting to delete {0} and abandoning.",
                            new Path[]{tmpPath, destPath});
                 try {
                     Files.deleteIfExists(tmpPath);
-                } catch (IOException e2) {
-                    e2.addSuppressed(e1);
+                } catch (IOException deleteFailed) {
+                    replaceFailed.addSuppressed(deleteFailed);
                     LOGGER.log(Level.WARNING, "Unable to delete {0}, good bye then!", tmpPath);
-                    throw e2;
+                    throw replaceFailed;
                 }
 
-                throw e1;
+                throw replaceFailed;
+            }
+        }
+
+        /*
+         * From fsync(2) on Linux:
+         *
+         *     Calling fsync() does not necessarily ensure that the entry in the directory containing the file has also
+         *     reached disk. For that an explicit fsync() on a file descriptor for the directory is also needed.
+         */
+        if (!DISABLE_FORCED_FLUSH && REQUIRES_DIR_FSYNC) {
+            try (FileChannel parentChannel = FileChannel.open(destPath.getParent())) {
+                parentChannel.force(true);
             }
         }
     }
 
-    @Override
-    protected void finalize() throws Throwable {
-        closeAndDeleteTempFile();
-    }
+    private static final class CleanupChecker implements Runnable {
+        private final FileChannelWriter core;
+        private final Path tmpPath;
+        private final Path destPath;
 
-    private void closeAndDeleteTempFile() throws IOException {
-        // one way or the other, temporary file should be deleted.
-        try {
-            close();
-        } finally {
-            Files.deleteIfExists(tmpPath);
+        CleanupChecker(final FileChannelWriter core, final Path tmpPath, final Path destPath) {
+            this.core = core;
+            this.tmpPath = tmpPath;
+            this.destPath = destPath;
+        }
+
+        @Override
+        public void run() {
+            if (core.isOpen()) {
+                LOGGER.log(Level.WARNING, "AtomicFileWriter for " + destPath + " was not closed before being released");
+                try {
+                    core.close();
+                } catch (IOException e) {
+                    LOGGER.log(Level.WARNING, "Failed to close " + tmpPath + " for destination file " + destPath, e);
+                }
+            }
+            try {
+                Files.deleteIfExists(tmpPath);
+            } catch (IOException e) {
+                LOGGER.log(Level.WARNING, "Failed to delete temporary file " + tmpPath + " for destination file " + destPath, e);
+            }
         }
     }
 

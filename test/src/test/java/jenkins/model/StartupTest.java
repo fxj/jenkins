@@ -21,17 +21,22 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
+
 package jenkins.model;
+
+import static org.junit.Assert.assertEquals;
 
 import java.util.Collections;
 import java.util.logging.Level;
-import org.junit.Test;
-import static org.junit.Assert.*;
 import org.junit.ClassRule;
 import org.junit.Rule;
+import org.junit.Test;
+import org.junit.experimental.categories.Category;
 import org.jvnet.hudson.test.JenkinsRule;
 import org.jvnet.hudson.test.LoggerRule;
+import org.jvnet.hudson.test.SmokeTest;
 
+@Category(SmokeTest.class)
 public class StartupTest {
 
     @ClassRule

@@ -24,10 +24,11 @@
 
 package hudson.model;
 
+import static org.junit.Assert.assertEquals;
+
 import java.io.File;
 import java.io.IOException;
 import jenkins.model.Jenkins;
-import static org.junit.Assert.*;
 import org.junit.Rule;
 import org.junit.Test;
 import org.jvnet.hudson.test.Issue;
@@ -48,23 +49,19 @@ public class ViewJobTest {
         assertEquals("[2]", j.getBuildsAsMap().keySet().toString());
     }
 
-    @SuppressWarnings({"rawtypes", "unchecked", "deprecation"})
-    public static final class J extends ViewJob<J,R> implements TopLevelItem {
+    @SuppressWarnings({"rawtypes", "deprecation"})
+    public static final class J extends ViewJob<J, R> implements TopLevelItem {
 
         public J(ItemGroup parent, String name) {
             super(parent, name);
         }
 
         @Override protected void reload() {
-            runs.load(this, new RunMap.Constructor<R>() {
-                @Override public R create(File d) throws IOException {
-                    return new R(J.this, d);
-                }
-            });
+            runs.load(this, d -> new R(J.this, d));
         }
 
         @Override public TopLevelItemDescriptor getDescriptor() {
-            return Jenkins.getInstance().getDescriptorByType(DescriptorImpl.class);
+            return Jenkins.get().getDescriptorByType(DescriptorImpl.class);
         }
 
         @TestExtension public static final class DescriptorImpl extends TopLevelItemDescriptor {
@@ -84,7 +81,7 @@ public class ViewJobTest {
 
     }
 
-    public static final class R extends Run<J,R> {
+    public static final class R extends Run<J, R> {
 
         public R(J j) throws IOException {
             super(j);

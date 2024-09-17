@@ -1,52 +1,16 @@
 package hudson.cli;
 
-import org.apache.commons.codec.binary.Base64;
-
-import java.io.IOException;
-import java.net.MalformedURLException;
-import java.net.URL;
-import java.util.concurrent.ExecutorService;
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
 
 /**
  * Fluent-API to instantiate {@link CLI}.
- * 
+ *
  * @author Kohsuke Kawaguchi
  */
 public class CLIConnectionFactory {
-    URL jenkins;
-    ExecutorService exec;
-    String httpsProxyTunnel;
     String authorization;
-
-    /**
-     * Top URL of the Jenkins to connect to.
-     */
-    public CLIConnectionFactory url(URL jenkins) {
-        this.jenkins = jenkins;
-        return this;
-    }
-
-    public CLIConnectionFactory url(String jenkins) throws MalformedURLException {
-        return url(new URL(jenkins));
-    }
-    
-    /**
-     * This {@link ExecutorService} is used to execute closures received from the server.
-     * Used only in Remoting mode.
-     */
-    public CLIConnectionFactory executorService(ExecutorService es) {
-        this.exec = es;
-        return this;
-    }
-
-    /**
-     * Configures the HTTP proxy that we use for making a plain TCP/IP connection.
-     * "host:port" that points to an HTTP proxy or null.
-     */
-    public CLIConnectionFactory httpsProxyTunnel(String value) {
-        this.httpsProxyTunnel = value;
-        return this;
-    }
+    boolean noCertificateCheck;
 
     /**
      * For CLI connection that goes through HTTP, sometimes you need
@@ -59,11 +23,21 @@ public class CLIConnectionFactory {
     }
 
     /**
+     * Skip TLS certificate and hostname verification checks.
+     *
+     * @since 2.444
+     */
+    public CLIConnectionFactory noCertificateCheck(boolean value) {
+        this.noCertificateCheck = value;
+        return this;
+    }
+
+    /**
      * Convenience method to call {@link #authorization} with the HTTP basic authentication.
      * Currently unused.
      */
     public CLIConnectionFactory basicAuth(String username, String password) {
-        return basicAuth(username+':'+password);
+        return basicAuth(username + ':' + password);
     }
 
     /**
@@ -71,14 +45,14 @@ public class CLIConnectionFactory {
      * Cf. {@code BasicHeaderApiTokenAuthenticator}.
      */
     public CLIConnectionFactory basicAuth(String userInfo) {
-        return authorization("Basic " + new String(Base64.encodeBase64((userInfo).getBytes())));
+        return authorization("Basic " + Base64.getEncoder().encodeToString(userInfo.getBytes(StandardCharsets.UTF_8)));
     }
 
     /**
-     * @deprecated Specific to Remoting-based protocol.
+     * Convenience method to call {@link #authorization} with the HTTP bearer authentication.
+     * Cf. {@code BasicHeaderApiTokenAuthenticator}.
      */
-    @Deprecated
-    public CLI connect() throws IOException, InterruptedException {
-        return new CLI(this);
+    public CLIConnectionFactory bearerAuth(String bearerToken) {
+        return authorization("Bearer " + bearerToken);
     }
 }

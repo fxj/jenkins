@@ -21,17 +21,38 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
+
 package jenkins.model;
 
-import hudson.DescriptorExtensionList;
 import hudson.ExtensionPoint;
 import hudson.model.Describable;
 import hudson.model.Descriptor;
+import java.util.List;
+
 /**
  * Participates in the rendering of the login page
  *
  * <p>
  * This class provides a few hooks to augment the HTML of the login page.
+ *
+ * <dl>
+ *  <dt>simple-branding.jelly</dt>
+ *  <dd>
+ *    This view contributes to the branding section, usually located on the left side of the login/register pages.
+ *  </dd>
+ *  <dt>simple-footer.jelly</dt>
+ *  <dd>
+ *    This view contributes to the footer section, located below the login/register form.
+ *  </dd>
+ *  <dt>simple-head.jelly</dt>
+ *  <dd>
+ *    This view contributes to the head section.
+ *  </dd>
+ *  <dt>simple-header.jelly</dt>
+ *  <dd>
+ *    This view contributes to the header section just above the login/register form.
+ *  </dd>
+ * </dl>
  *
  * @since 2.128
  */
@@ -52,21 +73,26 @@ public class SimplePageDecorator extends Descriptor<SimplePageDecorator> impleme
      * Every {@link SimplePageDecorator} is bound to URL via {@link Jenkins#getDescriptor()}.
      * This method returns such an URL.
      */
+
     public final String getUrl() {
-        return "descriptor/"+clazz.getName();
+        return "descriptor/" + clazz.getName();
     }
 
     /**
-     * The first found LoginDecarator, there can only be one.
+     * Returns all login page decorators.
+     * @since 2.156
+     */
+    public static List<SimplePageDecorator> all() {
+        return Jenkins.get().getDescriptorList(SimplePageDecorator.class);
+    }
+
+    /**
+     * The first found LoginDecorator, there can only be one.
      * @return the first found {@link SimplePageDecorator}
      */
-    public static SimplePageDecorator first(){
-        DescriptorExtensionList<SimplePageDecorator, SimplePageDecorator> descriptorList = Jenkins.getInstanceOrNull().<SimplePageDecorator, SimplePageDecorator>getDescriptorList(SimplePageDecorator.class);
-        if (descriptorList.size() >= 1) {
-            return descriptorList.get(0);
-        } else {
-            return null;
-        }
+    public static SimplePageDecorator first() {
+        List<SimplePageDecorator> decorators = all();
+        return decorators.isEmpty() ? null : decorators.get(0);
     }
 
 }

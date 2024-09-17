@@ -25,11 +25,14 @@
 package hudson.util;
 
 import com.thoughtworks.xstream.XStreamException;
+import com.thoughtworks.xstream.converters.ConversionException;
 import com.thoughtworks.xstream.converters.UnmarshallingContext;
 import com.thoughtworks.xstream.converters.collections.MapConverter;
 import com.thoughtworks.xstream.io.HierarchicalStreamReader;
 import com.thoughtworks.xstream.mapper.Mapper;
+import com.thoughtworks.xstream.security.InputManipulationException;
 import java.util.Map;
+import java.util.logging.Logger;
 import jenkins.util.xstream.CriticalXStreamException;
 
 /**
@@ -37,7 +40,6 @@ import jenkins.util.xstream.CriticalXStreamException;
  */
 @SuppressWarnings({"rawtypes", "unchecked"})
 final class RobustMapConverter extends MapConverter {
-
     private static final Object ERROR = new Object();
 
     RobustMapConverter(Mapper mapper) {
@@ -48,20 +50,33 @@ final class RobustMapConverter extends MapConverter {
         Object key = read(reader, context, map);
         Object value = read(reader, context, map);
         if (key != ERROR && value != ERROR) {
-            target.put(key, value);
+            try {
+                long nanoNow = System.nanoTime();
+                target.put(key, value);
+                XStream2SecurityUtils.checkForCollectionDoSAttack(context, nanoNow);
+            } catch (InputManipulationException e) {
+                Logger.getLogger(RobustMapConverter.class.getName()).warning(
+                        "DoS detected and prevented. If the heuristic was too aggressive, " +
+                                "you can customize the behavior by setting the hudson.util.XStream2.collectionUpdateLimit system property. " +
+                                "See https://www.jenkins.io/redirect/xstream-dos-prevention for more information.");
+                throw new CriticalXStreamException(e);
+            }
         }
     }
 
     private Object read(HierarchicalStreamReader reader, UnmarshallingContext context, Map map) {
+        if (!reader.hasMoreChildren()) {
+            var exception = new ConversionException("Invalid map entry");
+            reader.appendErrors(exception);
+            RobustReflectionConverter.addErrorInContext(context, exception);
+            return ERROR;
+        }
         reader.moveDown();
         try {
-            return readItem(reader, context, map);
+            return readBareItem(reader, context, map);
         } catch (CriticalXStreamException x) {
             throw x;
-        } catch (XStreamException x) {
-            RobustReflectionConverter.addErrorInContext(context, x);
-            return ERROR;
-        } catch (LinkageError x) {
+        } catch (XStreamException | LinkageError x) {
             RobustReflectionConverter.addErrorInContext(context, x);
             return ERROR;
         } finally {

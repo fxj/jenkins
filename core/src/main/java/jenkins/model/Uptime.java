@@ -1,7 +1,6 @@
 package jenkins.model;
 
 import hudson.Extension;
-import hudson.ExtensionList;
 import hudson.init.InitMilestone;
 import hudson.init.Initializer;
 
@@ -14,6 +13,7 @@ import hudson.init.Initializer;
 @Extension
 public class Uptime {
     private long startTime;
+    private long startNanos;
 
     /**
      * Timestamp in which Jenkins became fully up and running.
@@ -22,12 +22,17 @@ public class Uptime {
         return startTime;
     }
 
+    /**
+     * Duration in milliseconds since Jenkins became available
+     * @return uptime in milliseconds
+     */
     public long getUptime() {
-        return System.currentTimeMillis()-startTime;
+        return (System.nanoTime() - startNanos) / 1000000L;
     }
 
-    @Initializer(after=InitMilestone.JOB_LOADED)
+    @Initializer(after = InitMilestone.JOB_CONFIG_ADAPTED)
     public void init() {
         startTime = System.currentTimeMillis();
+        startNanos = System.nanoTime();
     }
 }

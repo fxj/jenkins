@@ -3,9 +3,9 @@ package hudson.model;
 import hudson.Extension;
 import hudson.ExtensionList;
 import hudson.ExtensionPoint;
-
 import java.io.IOException;
 import java.net.InetAddress;
+import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
 
 /**
@@ -48,7 +48,7 @@ public abstract class ComputerPinger implements ExtensionPoint {
 
         return false;
     }
-    
+
     /**
      * Default pinger - use Java built-in functionality.  This doesn't always work,
      * a host may be reachable even if this returns false.
@@ -57,7 +57,7 @@ public abstract class ComputerPinger implements ExtensionPoint {
     public static class BuiltInComputerPinger extends ComputerPinger {
         @Override
         public boolean isReachable(InetAddress ia, int timeout) throws IOException {
-            return ia.isReachable(timeout * 1000);
+            return ia.isReachable((int) TimeUnit.SECONDS.toMillis(timeout));
         }
     }
 

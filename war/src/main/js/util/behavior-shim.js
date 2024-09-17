@@ -1,4 +1,9 @@
+function specify(selector, id, priority, behavior) {
+  Behaviour.specify(selector, id, priority, behavior);
+}
 
-exports.specify = function(selector, id, priority, behavior) {
-    Behaviour.specify(selector, id, priority, behavior); // jshint ignore:line
-};
+function applySubtree(startNode, includeSelf) {
+  Behaviour.applySubtree(startNode, includeSelf);
+}
+
+export default { specify, applySubtree };

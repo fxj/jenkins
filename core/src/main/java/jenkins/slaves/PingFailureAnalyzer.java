@@ -3,9 +3,8 @@ package jenkins.slaves;
 import hudson.ExtensionList;
 import hudson.ExtensionPoint;
 import hudson.remoting.Channel;
-import jenkins.model.Jenkins;
-
 import java.io.IOException;
+import jenkins.model.Jenkins;
 
 /**
  * Get notified when a channel triggered a ping failure, but before the channel is killed.
@@ -28,6 +27,6 @@ public abstract class PingFailureAnalyzer implements ExtensionPoint {
     public abstract void onPingFailure(Channel c, Throwable cause) throws IOException;
 
     public static ExtensionList<PingFailureAnalyzer> all() {
-        return Jenkins.getInstance().getExtensionList(PingFailureAnalyzer.class);
+        return Jenkins.get().getExtensionList(PingFailureAnalyzer.class);
     }
 }

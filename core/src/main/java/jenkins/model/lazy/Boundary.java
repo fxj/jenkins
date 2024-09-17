@@ -21,6 +21,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
+
 package jenkins.model.lazy;
 
 /**
@@ -38,14 +39,14 @@ package jenkins.model.lazy;
  * @author Kohsuke Kawaguchi
  */
 enum Boundary {
-    LOWER(-1,-1),
-    HIGHER(1,0),
-    FLOOR(0,-1),
-    CEIL(0,0);
+    LOWER(-1, -1),
+    HIGHER(1, 0),
+    FLOOR(0, -1),
+    CEIL(0, 0);
 
     private final int offsetOfExactMatch, offsetOfInsertionPoint;
 
-    private Boundary(int offsetOfExactMatch, int offsetOfInsertionPoint) {
+    Boundary(int offsetOfExactMatch, int offsetOfInsertionPoint) {
         this.offsetOfExactMatch = offsetOfExactMatch;
         this.offsetOfInsertionPoint = offsetOfInsertionPoint;
     }
@@ -54,10 +55,9 @@ enum Boundary {
      * Computes the boundary value.
      */
     public int apply(int binarySearchOutput) {
-        int r = binarySearchOutput;
-        if (r>=0)    return r+offsetOfExactMatch;   // if we had some x_i==p
+        if (binarySearchOutput >= 0)    return binarySearchOutput + offsetOfExactMatch;   // if we had some x_i==p
 
-        int ip = -(r+1);
-        return ip+offsetOfInsertionPoint;
+        int ip = -(binarySearchOutput + 1);
+        return ip + offsetOfInsertionPoint;
     }
 }

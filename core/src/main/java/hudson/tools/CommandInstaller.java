@@ -24,12 +24,13 @@
 
 package hudson.tools;
 
+import edu.umd.cs.findbugs.annotations.NonNull;
 import hudson.Extension;
 import hudson.FilePath;
 import hudson.util.LineEndingConversion;
+import java.io.ObjectStreamException;
 import org.jenkinsci.Symbol;
 import org.kohsuke.stapler.DataBoundConstructor;
-import java.io.ObjectStreamException;
 
 /**
  * Installs a tool by running an arbitrary shell command.
@@ -49,8 +50,7 @@ public class CommandInstaller extends AbstractCommandInstaller {
 
     @Override
     public String[] getCommandCall(FilePath script) {
-        String[] cmd = {"sh", "-e", script.getRemote()};
-        return cmd;
+        return new String[]{"sh", "-e", script.getRemote()};
     }
 
     private Object readResolve() throws ObjectStreamException {
@@ -60,6 +60,7 @@ public class CommandInstaller extends AbstractCommandInstaller {
     @Extension @Symbol("command")
     public static class DescriptorImpl extends Descriptor<CommandInstaller> {
 
+        @NonNull
         @Override
         public String getDisplayName() {
             return Messages.CommandInstaller_DescriptorImpl_displayName();

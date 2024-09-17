@@ -24,9 +24,14 @@ THE SOFTWARE.
 -->
 
 <?jelly escape-by-default='true'?>
-<j:jelly xmlns:j="jelly:core" xmlns:st="jelly:stapler" xmlns:f="/lib/form" xmlns:l="/lib/layout" xmlns:i="jelly:fmt">
+<j:jelly xmlns:j="jelly:core" xmlns:st="jelly:stapler" xmlns:f="/lib/form" xmlns:l="/lib/layout" xmlns:i="jelly:fmt" xmlns:d="jelly:define">
+    <d:taglib uri="local">
+        <d:tag name="revokeIcon">
+          <l:icon src="symbol-trash" />
+        </d:tag>
+    </d:taglib>
     <st:adjunct includes="jenkins.security.ApiTokenProperty.resources"/>
-    <f:entry title="${%CurrentTokens(instance.tokenList.size())}" help="${descriptor.getHelpFile('tokenStore')}">
+    <f:entry xmlns:local="local" title="${%CurrentTokens(instance.tokenList.size())}" help="${descriptor.getHelpFile('tokenStore')}">
         <!-- ignore the whole div to prevent the "Add new token" button to trigger the confirm -->
         <div class="token-list ignore-dirty-panel">
             <j:set var="isStatisticsEnabled" value="${descriptor.isStatisticsEnabled()}" />
@@ -76,8 +81,8 @@ THE SOFTWARE.
                                             <j:when test="${useCounter > 0}">
                                                 <j:if test="${token.lastUseDate == null}">
                                                     <!--Should normally never happen without manual XML modification-->
-                                                    <span class="token-use-counter" title="${$TokenNeverUsedTooltip}">
-                                                        ${%TokenNeverUsedValue}
+                                                    <span class="token-use-counter" title="${%TokenNeverUsedTooltip}">
+                                                        ${%TokenNeverUsed}
                                                     </span>
                                                 </j:if>
                                                 <j:if test="${token.lastUseDate != null}">
@@ -103,12 +108,14 @@ THE SOFTWARE.
                                         </span>
                                     </j:otherwise>
                                 </j:choose>
-                                    
-                                <a href="#" onclick="return revokeToken(this)" class="token-revoke"
+
+                                <a href="#"
+                                   class="jenkins-button jenkins-button--tertiary jenkins-!-destructive-color api-token-property-token-revoke"
                                    data-message-if-legacy-revoked="${%RevokedToken}"
                                    data-confirm="${%ConfirmRevokeSingle}"
+                                   data-confirm-title="${%ConfirmRevokeSingleTitle}"
                                    data-target-url="${descriptor.descriptorFullUrl}/revoke">
-                                    <l:icon class="icon-text-error icon-sm" alt="${%RevokeToken}" />
+                                    <local:revokeIcon title="${%RevokeToken}" />
                                 </a>
                             </span>
                         </div>
@@ -119,19 +126,26 @@ THE SOFTWARE.
                             <f:textbox name="tokenName" clazz="token-name" placeholder="${%Default name}"/>
                             <st:nbsp /><!-- without this non-breakable space, double click on the div will put the focus on the input -->
                             <span class="new-token-value"><!--will be filled by javascript--></span>
-                            <span class="yui-button token-save">
-                                <button type="button" tabindex="0" data-target-url="${descriptor.descriptorFullUrl}/generateNewToken" onclick="saveApiToken(this)">
+                            <span class="token-save">
+                                <button class="jenkins-button" type="button" tabindex="0"
+                                        id="api-token-property-token-save"
+                                        data-target-url="${descriptor.descriptorFullUrl}/generateNewToken">
                                     ${%GenerateNewToken}
                                 </button>
                             </span>
                             <span class="token-cancel">
                                 <f:repeatableDeleteButton value="${%Cancel}" />
                             </span>
-                            <a href="#" onclick="return revokeToken(this)" class="token-revoke hidden-button"
-                               data-confirm="${%ConfirmRevokeSingle}"
-                               data-target-url="${descriptor.descriptorFullUrl}/revoke">
-                                <l:icon class="icon-text-error icon-sm"/>
-                            </a>
+                            <div class="controls-container">
+                              <l:copyButton text="" clazz="jenkins-hidden" tooltip="${%CopyToken}" iconOnly="true" />
+                              <a href="#"
+                                 class="jenkins-button jenkins-button--tertiary jenkins-!-destructive-color api-token-property-token-revoke hidden-button"
+                                 data-confirm="${%ConfirmRevokeSingle}"
+                                 data-confirm-title="${%ConfirmRevokeSingleTitle}"
+                                 data-target-url="${descriptor.descriptorFullUrl}/revoke">
+                                <local:revokeIcon title="${%RevokeToken}" />
+                              </a>
+                            </div>
                             <div class="error token-error-message"><!-- filled in case of error --></div>
                             <div class="warning display-after-generation">${%TokenDisplayedOnce}</div>
                         </div>
@@ -141,7 +155,7 @@ THE SOFTWARE.
         </div>
     </f:entry>
     <j:if test="${descriptor.mustDisplayLegacyApiToken(it)}">
-        <f:advanced title="${%Show Legacy API Token}" align="left">
+        <f:advanced title="${%Show Legacy API Token}">
             <f:entry title="${%Legacy API Token}" field="apiToken">
                 <f:readOnlyTextbox id="apiToken" default="${descriptor.noLegacyToken}"/>
             </f:entry>

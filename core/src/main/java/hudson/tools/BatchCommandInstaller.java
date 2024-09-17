@@ -2,7 +2,7 @@
  * The MIT License
  *
  * Copyright (c) 2013, Oleg Nenashev
- * 
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
  * in the Software without restriction, including without limitation the rights
@@ -24,16 +24,17 @@
 
 package hudson.tools;
 
+import edu.umd.cs.findbugs.annotations.NonNull;
 import hudson.Extension;
 import hudson.FilePath;
 import hudson.util.LineEndingConversion;
+import java.io.ObjectStreamException;
 import org.jenkinsci.Symbol;
 import org.kohsuke.stapler.DataBoundConstructor;
-import java.io.ObjectStreamException;
 
 /**
  * Installs tool via script execution of Batch script.
- * 
+ *
  * @since 1.549
  */
 public class BatchCommandInstaller extends AbstractCommandInstaller {
@@ -50,20 +51,20 @@ public class BatchCommandInstaller extends AbstractCommandInstaller {
 
     @Override
     public String[] getCommandCall(FilePath script) {
-        String[] cmd = {"cmd", "/c", "call", script.getRemote()};
-        return cmd;
+        return new String[]{"cmd", "/c", "call", script.getRemote()};
     }
 
     private Object readResolve() throws ObjectStreamException {
         return new BatchCommandInstaller(getLabel(), getCommand(), getToolHome());
     }
- 
+
     @Extension @Symbol("batchFile")
     public static class DescriptorImpl extends Descriptor<BatchCommandInstaller> {
 
+        @NonNull
         @Override
         public String getDisplayName() {
             return Messages.BatchCommandInstaller_DescriptorImpl_displayName();
-        }        
+        }
     }
 }

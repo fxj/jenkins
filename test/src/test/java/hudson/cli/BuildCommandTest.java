@@ -24,9 +24,21 @@
 
 package hudson.cli;
 
+import static hudson.cli.CLICommandInvoker.Matcher.failedWith;
+import static hudson.cli.CLICommandInvoker.Matcher.succeeded;
+import static org.awaitility.Awaitility.await;
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.allOf;
+import static org.hamcrest.Matchers.containsString;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
+
 import hudson.Extension;
+import hudson.Functions;
 import hudson.Launcher;
-import static hudson.cli.CLICommandInvoker.Matcher.*;
 import hudson.model.AbstractBuild;
 import hudson.model.Action;
 import hudson.model.BuildListener;
@@ -34,7 +46,6 @@ import hudson.model.Executor;
 import hudson.model.FileParameterDefinition;
 import hudson.model.FreeStyleBuild;
 import hudson.model.FreeStyleProject;
-import hudson.model.ParameterDefinition.ParameterDescriptor;
 import hudson.model.ParameterValue;
 import hudson.model.ParametersAction;
 import hudson.model.ParametersDefinitionProperty;
@@ -45,27 +56,27 @@ import hudson.model.StringParameterDefinition;
 import hudson.model.StringParameterValue;
 import hudson.model.TopLevelItem;
 import hudson.slaves.DumbSlave;
+import hudson.tasks.BatchFile;
 import hudson.tasks.Shell;
 import hudson.util.OneShotEvent;
 import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.util.Arrays;
+import java.nio.charset.Charset;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 import net.sf.json.JSONObject;
-import org.apache.commons.io.output.TeeOutputStream;
-import static org.hamcrest.Matchers.*;
-import static org.junit.Assert.*;
 import org.junit.ClassRule;
 import org.junit.Rule;
 import org.junit.Test;
+import org.junit.experimental.categories.Category;
 import org.jvnet.hudson.test.BuildWatcher;
 import org.jvnet.hudson.test.CaptureEnvironmentBuilder;
 import org.jvnet.hudson.test.Issue;
 import org.jvnet.hudson.test.JenkinsRule;
+import org.jvnet.hudson.test.SmokeTest;
 import org.jvnet.hudson.test.TestBuilder;
 import org.jvnet.hudson.test.TestExtension;
-import org.kohsuke.stapler.StaplerRequest;
+import org.kohsuke.stapler.StaplerRequest2;
 
 /**
  * {@link BuildCommand} test.
@@ -88,34 +99,31 @@ public class BuildCommandTest {
         OneShotEvent completed = new OneShotEvent();
         p.getBuildersList().add(new TestBuilder() {
             @Override
-            public boolean perform(AbstractBuild<?, ?> build, Launcher launcher, BuildListener listener) throws InterruptedException, IOException {
+            public boolean perform(AbstractBuild<?, ?> build, Launcher launcher, BuildListener listener) throws InterruptedException {
                 started.signal();
                 completed.block();
                 return true;
             }
         });
 
-        // this should be asynchronous
-        try (CLI cli = new CLI(j.getURL())) {
-            assertEquals(0, cli.execute("build", p.getName()));
-            started.block();
-            assertTrue(p.getBuildByNumber(1).isBuilding());
-            completed.signal();
-        }
+        assertThat(new CLICommandInvoker(j, new BuildCommand()).invokeWithArgs(p.getName()), CLICommandInvoker.Matcher.succeeded());
+        started.block();
+        assertTrue(p.getBuildByNumber(1).isBuilding());
+        completed.signal();
+        j.waitForCompletion(p.getBuildByNumber(1));
     }
 
     /**
      * Tests synchronous execution.
      */
     @Test
+    @Category(SmokeTest.class)
     public void sync() throws Exception {
         FreeStyleProject p = j.createFreeStyleProject();
-        p.getBuildersList().add(new Shell("sleep 3"));
+        p.getBuildersList().add(Functions.isWindows() ? new BatchFile("ping 127.0.0.1") : new Shell("sleep 3"));
 
-        try (CLI cli = new CLI(j.getURL())) {
-            cli.execute("build", "-s", p.getName());
-            assertFalse(p.getBuildByNumber(1).isBuilding());
-        }
+        assertThat(new CLICommandInvoker(j, new BuildCommand()).invokeWithArgs("-s", p.getName()), CLICommandInvoker.Matcher.succeeded());
+        assertFalse(p.getBuildByNumber(1).isBuilding());
     }
 
     /**
@@ -124,12 +132,10 @@ public class BuildCommandTest {
     @Test
     public void syncWOutputStreaming() throws Exception {
         FreeStyleProject p = j.createFreeStyleProject();
-        p.getBuildersList().add(new Shell("sleep 3"));
+        p.getBuildersList().add(Functions.isWindows() ? new BatchFile("ping 127.0.0.1") : new Shell("sleep 3"));
 
-        try (CLI cli = new CLI(j.getURL())) {
-            cli.execute("build", "-s", "-v", "-r", "5", p.getName());
-            assertFalse(p.getBuildByNumber(1).isBuilding());
-        }
+        assertThat(new CLICommandInvoker(j, new BuildCommand()).invokeWithArgs("-s", "-v", "-r", "5", p.getName()), CLICommandInvoker.Matcher.succeeded());
+        assertFalse(p.getBuildByNumber(1).isBuilding());
     }
 
     @Test
@@ -137,11 +143,9 @@ public class BuildCommandTest {
         FreeStyleProject p = j.createFreeStyleProject();
         p.addProperty(new ParametersDefinitionProperty(new StringParameterDefinition("key", null)));
 
-        try (CLI cli = new CLI(j.getURL())) {
-            cli.execute("build", "-s", "-p", "key=foobar", p.getName());
-            FreeStyleBuild b = j.assertBuildStatusSuccess(p.getBuildByNumber(1));
-            assertEquals("foobar", b.getAction(ParametersAction.class).getParameter("key").getValue());
-        }
+        assertThat(new CLICommandInvoker(j, new BuildCommand()).invokeWithArgs("-s", "-p", "key=foobar", p.getName()), CLICommandInvoker.Matcher.succeeded());
+        FreeStyleBuild b = j.assertBuildStatusSuccess(p.getBuildByNumber(1));
+        assertEquals("foobar", b.getAction(ParametersAction.class).getParameter("key").getValue());
     }
 
     @Test
@@ -149,37 +153,32 @@ public class BuildCommandTest {
         FreeStyleProject p = j.createFreeStyleProject();
         p.addProperty(new ParametersDefinitionProperty(new StringParameterDefinition("key", "default"), new StringParameterDefinition("key2", "default2")));
 
-        try (CLI cli = new CLI(j.getURL())) {
-            cli.execute("build", "-s", "-p", "key=foobar", p.getName());
-            FreeStyleBuild b = j.assertBuildStatusSuccess(p.getBuildByNumber(1));
-            assertEquals("foobar", b.getAction(ParametersAction.class).getParameter("key").getValue());
-            assertEquals("default2", b.getAction(ParametersAction.class).getParameter("key2").getValue());
-        }
+        assertThat(new CLICommandInvoker(j, new BuildCommand()).invokeWithArgs("-s", "-p", "key=foobar", p.getName()), CLICommandInvoker.Matcher.succeeded());
+        FreeStyleBuild b = j.assertBuildStatusSuccess(p.getBuildByNumber(1));
+        assertEquals("foobar", b.getAction(ParametersAction.class).getParameter("key").getValue());
+        assertEquals("default2", b.getAction(ParametersAction.class).getParameter("key2").getValue());
     }
 
     // TODO randomly fails: Started test0 #1
     @Test
     public void consoleOutput() throws Exception {
         FreeStyleProject p = j.createFreeStyleProject();
-        try (CLI cli = new CLI(j.getURL())) {
-            ByteArrayOutputStream o = new ByteArrayOutputStream();
-            cli.execute(Arrays.asList("build", "-s", "-v", p.getName()), System.in, new TeeOutputStream(System.out, o), System.err);
-            j.assertBuildStatusSuccess(p.getBuildByNumber(1));
-            assertThat(o.toString(), allOf(containsString("Started from command line by anonymous"), containsString("Finished: SUCCESS")));
-        }
+        CLICommandInvoker.Result r = new CLICommandInvoker(j, new BuildCommand()).invokeWithArgs("-s", "-v", p.getName());
+        assertThat(r, CLICommandInvoker.Matcher.succeeded());
+        j.assertBuildStatusSuccess(p.getBuildByNumber(1));
+        assertThat(r.stdout(), allOf(containsString("Started from command line by anonymous"), containsString("Finished: SUCCESS")));
     }
 
     // TODO randomly fails: Started test0 #1
     @Test
     public void consoleOutputWhenBuildSchedulingRefused() throws Exception {
         FreeStyleProject p = j.createFreeStyleProject();
-        try (CLI cli = new CLI(j.getURL())) {
-            ByteArrayOutputStream o = new ByteArrayOutputStream();
-            cli.execute(Arrays.asList("build", "-s", "-v", p.getName()), System.in, System.out, new TeeOutputStream(System.err, o));
-            assertThat(o.toString(), containsString(BuildCommand.BUILD_SCHEDULING_REFUSED));
-        }
+        CLICommandInvoker.Result r = new CLICommandInvoker(j, new BuildCommand()).invokeWithArgs("-s", "-v", p.getName());
+        assertThat(r, CLICommandInvoker.Matcher.failedWith(4));
+        assertThat(r.stderr(), containsString(BuildCommand.BUILD_SCHEDULING_REFUSED));
     }
     // <=>
+
     @TestExtension("consoleOutputWhenBuildSchedulingRefused")
     public static class UnschedulingVetoer extends QueueDecisionHandler {
         @Override
@@ -231,7 +230,7 @@ public class BuildCommandTest {
         FreeStyleProject project = j.createFreeStyleProject("foo");
         project.setAssignedNode(slave);
 
-        // Create test parameter with Null default value 
+        // Create test parameter with Null default value
         NullDefaultValueParameterDefinition nullDefaultDefinition = new NullDefaultValueParameterDefinition();
         ParametersDefinitionProperty pdp = new ParametersDefinitionProperty(
                 new StringParameterDefinition("string", "defaultValue", "description"),
@@ -243,24 +242,24 @@ public class BuildCommandTest {
         // Warmup
         j.buildAndAssertSuccess(project);
 
-        for (Executor exec : slave.toComputer().getExecutors()) {
-            assertTrue("Executor has died before the test start: " + exec, exec.isActive());
-        }
+        await().pollInterval(250, TimeUnit.MILLISECONDS)
+                .atMost(10, TimeUnit.SECONDS)
+                .until(() -> slave.toComputer().getExecutors().stream().map(Executor::isActive).allMatch(Boolean::valueOf));
 
         // Create CLI & run command
         CLICommandInvoker invoker = new CLICommandInvoker(j, new BuildCommand());
         CLICommandInvoker.Result result = invoker.invokeWithArgs("foo", "-p", "string=value");
         assertThat(result, failedWith(2));
-        assertThat(result.stderr(), containsString("ERROR: No default value for the parameter \'FOO\'."));
+        assertThat(result.stderr(), containsString("ERROR: No default value for the parameter 'FOO'."));
 
         Thread.sleep(5000); // Give the job 5 seconds to be submitted
         assertNull("Build should not be scheduled", j.jenkins.getQueue().getItem(project));
         assertNull("Build should not be scheduled", project.getBuildByNumber(2));
 
         // Check executors health after a timeout
-        for (Executor exec : slave.toComputer().getExecutors()) {
-            assertTrue("Executor is dead: " + exec, exec.isActive());
-        }
+        await().pollInterval(250, TimeUnit.MILLISECONDS)
+                .atMost(10, TimeUnit.SECONDS)
+                .until(() -> slave.toComputer().getExecutors().stream().map(Executor::isActive).allMatch(Boolean::valueOf));
     }
 
     public static final class NullDefaultValueParameterDefinition extends SimpleParameterDefinition {
@@ -275,7 +274,7 @@ public class BuildCommandTest {
         }
 
         @Override
-        public ParameterValue createValue(StaplerRequest req, JSONObject jo) {
+        public ParameterValue createValue(StaplerRequest2 req, JSONObject jo) {
             return createValue("BAR");
         }
 
@@ -302,7 +301,7 @@ public class BuildCommandTest {
             }
         });
         assertThat(new CLICommandInvoker(j, "build").
-                withStdin(new ByteArrayInputStream("uploaded content here".getBytes())).
+                withStdin(new ByteArrayInputStream("uploaded content here".getBytes(Charset.defaultCharset()))).
                 invokeWithArgs("-f", "-p", "file=", "myjob"),
             CLICommandInvoker.Matcher.succeeded());
         FreeStyleBuild b = p.getBuildByNumber(1);

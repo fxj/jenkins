@@ -21,22 +21,22 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
+
 package jenkins.model;
 
 import hudson.Extension;
 import hudson.model.Node.Mode;
+import java.io.IOException;
 import net.sf.json.JSONObject;
 import org.jenkinsci.Symbol;
-import org.kohsuke.stapler.StaplerRequest;
-
-import java.io.IOException;
+import org.kohsuke.stapler.StaplerRequest2;
 
 /**
- * Adds the configuration regarding building on master.
+ * Adds the configuration regarding building on the built-in node.
  *
  * @author Kohsuke Kawaguchi
  */
-@Extension(ordinal=500) @Symbol("masterBuild")
+@Extension(ordinal = 500) @Symbol({"builtInNode", "masterBuild"})
 public class MasterBuildConfiguration extends GlobalConfiguration {
     public int getNumExecutors() {
         return Jenkins.get().getNumExecutors();
@@ -47,18 +47,18 @@ public class MasterBuildConfiguration extends GlobalConfiguration {
     }
 
     @Override
-    public boolean configure(StaplerRequest req, JSONObject json) throws FormException {
+    public boolean configure(StaplerRequest2 req, JSONObject json) throws FormException {
         Jenkins j = Jenkins.get();
         try {
             // for compatibility reasons, this value is stored in Jenkins
             String num = json.getString("numExecutors");
             if (!num.matches("\\d+")) {
-                throw new FormException(Messages.Hudson_Computer_IncorrectNumberOfExecutors(),"numExecutors");
+                throw new FormException(Messages.Hudson_Computer_IncorrectNumberOfExecutors(), "numExecutors");
             }
-            
+
             j.setNumExecutors(json.getInt("numExecutors"));
-            if (req.hasParameter("master.mode"))
-                j.setMode(Mode.valueOf(req.getParameter("master.mode")));
+            if (req.hasParameter("builtin.mode"))
+                j.setMode(Mode.valueOf(req.getParameter("builtin.mode")));
             else
                 j.setMode(Mode.NORMAL);
 
@@ -66,8 +66,7 @@ public class MasterBuildConfiguration extends GlobalConfiguration {
 
             return true;
         } catch (IOException e) {
-            throw new FormException(e,"numExecutors");
+            throw new FormException(e, "numExecutors");
         }
     }
 }
-

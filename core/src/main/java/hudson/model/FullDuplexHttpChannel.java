@@ -21,11 +21,11 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
+
 package hudson.model;
 
 import hudson.remoting.Channel;
 import hudson.remoting.PingThread;
-import hudson.remoting.Channel.Mode;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -38,12 +38,14 @@ import jenkins.util.FullDuplexHttpService;
  * Builds a {@link Channel} on top of two HTTP streams (one used for each direction.)
  *
  * @author Kohsuke Kawaguchi
+ * @deprecated Unused.
  */
-abstract public class FullDuplexHttpChannel extends FullDuplexHttpService {
+@Deprecated
+public abstract class FullDuplexHttpChannel extends FullDuplexHttpService {
     private Channel channel;
     private final boolean restricted;
 
-    public FullDuplexHttpChannel(UUID uuid, boolean restricted) throws IOException {
+    protected FullDuplexHttpChannel(UUID uuid, boolean restricted) throws IOException {
         super(uuid);
         this.restricted = restricted;
     }
@@ -51,7 +53,7 @@ abstract public class FullDuplexHttpChannel extends FullDuplexHttpService {
     @Override
     protected void run(final InputStream upload, OutputStream download) throws IOException, InterruptedException {
         channel = new Channel("HTTP full-duplex channel " + uuid,
-                Computer.threadPoolForRemoting, Mode.BINARY, upload, download, null, restricted);
+                Computer.threadPoolForRemoting, Channel.Mode.BINARY, upload, download, null, restricted);
 
         // so that we can detect dead clients, periodically send something
         PingThread ping = new PingThread(channel) {

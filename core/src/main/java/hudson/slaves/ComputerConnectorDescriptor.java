@@ -11,8 +11,7 @@ import jenkins.model.Jenkins;
  * @since 1.383
  */
 public abstract class ComputerConnectorDescriptor extends Descriptor<ComputerConnector> {
-    public static DescriptorExtensionList<ComputerConnector,ComputerConnectorDescriptor> all() {
-        return Jenkins.getInstance().<ComputerConnector,ComputerConnectorDescriptor>
-                                    getDescriptorList(ComputerConnector.class);
+    public static DescriptorExtensionList<ComputerConnector, ComputerConnectorDescriptor> all() {
+        return Jenkins.get().getDescriptorList(ComputerConnector.class);
     }
 }

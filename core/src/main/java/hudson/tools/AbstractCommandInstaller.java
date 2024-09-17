@@ -21,11 +21,13 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
+
 package hudson.tools;
 
 import hudson.FilePath;
 import hudson.model.Node;
 import hudson.model.TaskListener;
+import hudson.tasks.CommandInterpreter;
 import hudson.util.FormValidation;
 import java.io.IOException;
 import org.kohsuke.stapler.QueryParameter;
@@ -36,7 +38,7 @@ import org.kohsuke.stapler.QueryParameter;
  * @see BatchCommandInstaller
  * @see CommandInstaller
  * @author Oleg Nenashev
- * 
+ *
  */
 public abstract class AbstractCommandInstaller extends ToolInstaller {
 
@@ -46,7 +48,7 @@ public abstract class AbstractCommandInstaller extends ToolInstaller {
     private final String command;
     private final String toolHome;
 
-    public AbstractCommandInstaller(String label, String command, String toolHome) {
+    protected AbstractCommandInstaller(String label, String command, String toolHome) {
         super(label);
         this.command = command;
         this.toolHome = toolHome;
@@ -73,7 +75,7 @@ public abstract class AbstractCommandInstaller extends ToolInstaller {
         // TODO support Unix scripts with interpreter line (see Shell.buildCommandLine)
         FilePath script = dir.createTextTempFile("hudson", getCommandFileExtension(), command);
         try {
-            String cmd[] = getCommandCall(script);
+            String[] cmd = getCommandCall(script);
             int r = node.createLauncher(log).launch().cmds(cmd).stdout(log).pwd(dir).join();
             if (r != 0) {
                 throw new IOException("Command returned status " + r);
@@ -84,11 +86,11 @@ public abstract class AbstractCommandInstaller extends ToolInstaller {
         return dir.child(getToolHome());
     }
 
-    public static abstract class Descriptor<TInstallerClass extends AbstractCommandInstaller>
+    public abstract static class Descriptor<TInstallerClass extends AbstractCommandInstaller>
             extends ToolInstallerDescriptor<TInstallerClass> {
 
         public FormValidation doCheckCommand(@QueryParameter String value) {
-            if (value.length() > 0) {
+            if (!value.isEmpty()) {
                 return FormValidation.ok();
             } else {
                 return FormValidation.error(Messages.CommandInstaller_no_command());
@@ -96,10 +98,10 @@ public abstract class AbstractCommandInstaller extends ToolInstaller {
         }
 
         public FormValidation doCheckToolHome(@QueryParameter String value) {
-            if (value.length() > 0) {
+            if (!value.isEmpty()) {
                 return FormValidation.ok();
             } else {
-                return FormValidation.error(Messages.CommandInstaller_no_command());
+                return FormValidation.error(Messages.CommandInstaller_no_toolHome());
             }
         }
     }

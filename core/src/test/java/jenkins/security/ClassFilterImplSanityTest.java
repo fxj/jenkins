@@ -21,16 +21,19 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
+
 package jenkins.security;
+
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.contains;
 
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.TreeSet;
 import java.util.stream.Collectors;
+import jenkins.util.MemoryReductionUtil;
 import org.apache.commons.io.IOUtils;
-import static org.hamcrest.Matchers.*;
-import static org.junit.Assert.assertThat;
 import org.junit.Test;
 import org.jvnet.hudson.test.For;
 
@@ -45,7 +48,7 @@ public class ClassFilterImplSanityTest {
     public void whitelistSanity() throws Exception {
         try (InputStream is = ClassFilterImpl.class.getResourceAsStream("whitelisted-classes.txt")) {
             List<String> lines = IOUtils.readLines(is, StandardCharsets.UTF_8).stream().filter(line -> !line.matches("#.*|\\s*")).collect(Collectors.toList());
-            assertThat("whitelist is NOT ordered", new TreeSet<>(lines), contains(lines.toArray(new String[0])));
+            assertThat("whitelist is NOT ordered", new TreeSet<>(lines), contains(lines.toArray(MemoryReductionUtil.EMPTY_STRING_ARRAY)));
             for (String line : lines) {
                 try {
                     Class.forName(line);

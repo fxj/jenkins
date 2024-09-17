@@ -51,6 +51,11 @@ THE SOFTWARE.
   </servlet-mapping>
 
   <filter>
+    <filter-name>suspicious-request-filter</filter-name>
+    <filter-class>jenkins.security.SuspiciousRequestFilter</filter-class>
+    <async-supported>true</async-supported>
+  </filter>
+  <filter>
     <filter-name>diagnostic-name-filter</filter-name>
     <filter-class>org.kohsuke.stapler.DiagnosticThreadNameFilter</filter-class>
     <async-supported>true</async-supported>
@@ -61,8 +66,8 @@ THE SOFTWARE.
     <async-supported>true</async-supported>
   </filter>
   <filter>
-    <filter-name>compression-filter</filter-name>
-    <filter-class>org.kohsuke.stapler.compression.CompressionFilter</filter-class>
+    <filter-name>uncaught-exception-filter</filter-name>
+    <filter-class>org.kohsuke.stapler.UncaughtExceptionFilter</filter-class>
     <async-supported>true</async-supported>
   </filter>
   <filter>
@@ -73,6 +78,11 @@ THE SOFTWARE.
   <filter>
     <filter-name>csrf-filter</filter-name>
     <filter-class>hudson.security.csrf.CrumbFilter</filter-class>
+    <async-supported>true</async-supported>
+  </filter>
+  <filter>
+    <filter-name>error-attribute-filter</filter-name>
+    <filter-class>jenkins.ErrorAttributeFilter</filter-class>
     <async-supported>true</async-supported>
   </filter>
   <filter>
@@ -125,7 +135,11 @@ THE SOFTWARE.
     <url-pattern>*.png</url-pattern>
   </filter-mapping>
   -->
-  
+
+  <filter-mapping>
+    <filter-name>suspicious-request-filter</filter-name>
+    <url-pattern>/*</url-pattern>
+  </filter-mapping>
   <filter-mapping>
     <filter-name>diagnostic-name-filter</filter-name>
     <url-pattern>/*</url-pattern>
@@ -135,7 +149,7 @@ THE SOFTWARE.
     <url-pattern>/*</url-pattern>
   </filter-mapping>
   <filter-mapping>
-    <filter-name>compression-filter</filter-name>
+    <filter-name>uncaught-exception-filter</filter-name>
     <url-pattern>/*</url-pattern>
   </filter-mapping>
   <filter-mapping>
@@ -144,6 +158,10 @@ THE SOFTWARE.
   </filter-mapping>
   <filter-mapping>
     <filter-name>csrf-filter</filter-name>
+    <url-pattern>/*</url-pattern>
+  </filter-mapping>
+  <filter-mapping>
+    <filter-name>error-attribute-filter</filter-name>
     <url-pattern>/*</url-pattern>
   </filter-mapping>
   <filter-mapping>
@@ -163,7 +181,7 @@ THE SOFTWARE.
   </listener>
 
   <!--
-    HUDSON-1235 suggests containers interpret '*' as "all roles defined in web.xml"
+    JENKINS-1235 suggests containers interpret '*' as "all roles defined in web.xml"
     as opposed to "all roles defined in the security realm", so we need to list some
     common names in the hope that users will have at least one of those roles.
   -->
@@ -188,6 +206,16 @@ THE SOFTWARE.
     </auth-constraint>
   </security-constraint>
   
+  <!-- Disable TRACE method with security constraint (copied from jetty/webdefaults.xml) -->
+  <security-constraint>
+    <web-resource-collection>
+      <web-resource-name>Disable TRACE</web-resource-name>
+      <url-pattern>/*</url-pattern>
+      <http-method>TRACE</http-method>
+    </web-resource-collection>
+    <auth-constraint />
+  </security-constraint>
+  
   <security-constraint>
     <web-resource-collection>
       <web-resource-name>other</web-resource-name>
@@ -203,14 +231,6 @@ THE SOFTWARE.
       <form-error-page>/loginError</form-error-page>
     </form-login-config>
   </login-config>
-
-
-  <!-- if specified, this value is used as the Hudson home directory -->
-  <env-entry>
-    <env-entry-name>HUDSON_HOME</env-entry-name>
-    <env-entry-type>java.lang.String</env-entry-type>
-    <env-entry-value></env-entry-value>
-  </env-entry>
 
   <!-- configure additional extension-content-type mappings -->
   <mime-mapping>
@@ -246,11 +266,16 @@ THE SOFTWARE.
     <exception-type>java.lang.Throwable</exception-type>
     <location>/oops</location>
   </error-page>
+  <error-page>
+    <error-code>404</error-code>
+    <location>/404</location>
+  </error-page>
 
   <session-config>
     <cookie-config>
       <!-- See https://www.owasp.org/index.php/HttpOnly for the discussion of this topic in OWASP -->
       <http-only>true</http-only>
     </cookie-config>
+    <!-- Tracking mode is managed by WebAppMain.FORCE_SESSION_TRACKING_BY_COOKIE_PROP -->
   </session-config>
 </web-app>
